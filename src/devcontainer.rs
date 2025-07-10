@@ -55,14 +55,14 @@ pub fn exec_devcontainer(
     // Add additional features if configured
     for (feature, value) in &config.additional_features {
         cmd.arg("--additional-features")
-            .arg(format!("{}={}", feature, value));
+            .arg(format!("{feature}={value}"));
     }
 
     let output = cmd.output()?;
 
     if !output.status.success() {
         let error = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Failed to start devcontainer: {}", error).into());
+        return Err(format!("Failed to start devcontainer: {error}").into());
     }
 
     println!("Successfully started devcontainer!");
@@ -147,8 +147,10 @@ mod tests {
         let devcontainer_file = temp_dir.path().join("devcontainer.json");
         fs::write(&devcontainer_file, "{}").unwrap();
 
-        let mut config = AppConfig::default();
-        config.dotfiles_repo = Some("https://github.com/user/dotfiles".to_string());
+        let config = AppConfig {
+            dotfiles_repo: Some("https://github.com/user/dotfiles".to_string()),
+            ..Default::default()
+        };
 
         // This test will fail if devcontainer CLI is not installed, which is expected
         let result = exec_devcontainer(&temp_dir.path().to_path_buf(), &config);

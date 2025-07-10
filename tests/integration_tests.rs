@@ -65,7 +65,7 @@ fn test_integration_multiple_paths() {
 
     // Add multiple paths
     for i in 0..5 {
-        let test_path = temp_dir.path().join(format!("project_{}", i));
+        let test_path = temp_dir.path().join(format!("project_{i}"));
         fs::create_dir(&test_path).unwrap();
         config = config_manager.add_recent_path(config, test_path).unwrap();
     }

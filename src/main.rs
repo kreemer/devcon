@@ -176,7 +176,7 @@ fn handle_check_command() -> Result<(), Box<dyn std::error::Error>> {
             println!("✅ All requirements met!");
         }
         Err(e) => {
-            println!("❌ {}", e);
+            println!("❌ {e}");
             return Err("System requirements not met".into());
         }
     }
@@ -229,7 +229,7 @@ fn handle_dotfiles_command(
         DotfilesCommands::Set { repo_url } => {
             let config = config_manager.load_or_create_config()?;
             config_manager.set_dotfiles_repo(config, Some(repo_url.clone()))?;
-            println!("✅ Dotfiles repository set to: {}", repo_url);
+            println!("✅ Dotfiles repository set to: {repo_url}");
         }
         DotfilesCommands::Clear => {
             let config = config_manager.load_or_create_config()?;
@@ -239,7 +239,7 @@ fn handle_dotfiles_command(
         DotfilesCommands::Show => {
             let config = config_manager.load_or_create_config()?;
             match &config.dotfiles_repo {
-                Some(repo) => println!("Current dotfiles repository: {}", repo),
+                Some(repo) => println!("Current dotfiles repository: {repo}"),
                 None => println!("No dotfiles repository configured"),
             }
         }
@@ -255,12 +255,12 @@ fn handle_features_command(
         FeaturesCommands::Add { feature, value } => {
             let config = config_manager.load_or_create_config()?;
             config_manager.add_feature(config, feature.clone(), value.clone())?;
-            println!("✅ Added feature: {} = {}", feature, value);
+            println!("✅ Added feature: {feature} = {value}");
         }
         FeaturesCommands::Remove { feature } => {
             let config = config_manager.load_or_create_config()?;
             config_manager.remove_feature(config, feature.clone())?;
-            println!("✅ Removed feature: {}", feature);
+            println!("✅ Removed feature: {feature}");
         }
         FeaturesCommands::List => {
             let config = config_manager.load_or_create_config()?;
@@ -269,7 +269,7 @@ fn handle_features_command(
             } else {
                 println!("Configured additional features:");
                 for (feature, value) in &config.additional_features {
-                    println!("  {} = {}", feature, value);
+                    println!("  {feature} = {value}");
                 }
             }
         }
