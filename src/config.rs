@@ -9,7 +9,6 @@ pub struct AppConfig {
 
 pub struct ConfigManager {
     config_path: PathBuf,
-    xdg_dirs: xdg::BaseDirectories,
 }
 
 impl ConfigManager {
@@ -21,10 +20,7 @@ impl ConfigManager {
                 .expect("Cannot create config directory")
         });
 
-        Ok(ConfigManager {
-            config_path,
-            xdg_dirs,
-        })
+        Ok(ConfigManager { config_path })
     }
 
     pub fn load_or_create_config(&self) -> Result<AppConfig, Box<dyn std::error::Error>> {

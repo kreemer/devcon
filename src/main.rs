@@ -34,7 +34,7 @@ enum Commands {
         path: Option<PathBuf>,
     },
     /// Check if the required tools are available
-    #[command(about = "Check if VS Code and devcontainer CLI are properly installed")]
+    #[command(about = "Check if DevContainer CLI is properly installed and available")]
     Check,
 }
 
@@ -91,7 +91,6 @@ fn handle_check_command() -> Result<(), Box<dyn std::error::Error>> {
 
     match check_devcontainer_cli() {
         Ok(()) => {
-            println!("✅ VS Code is installed and available");
             println!("✅ All requirements met!");
         }
         Err(e) => {
