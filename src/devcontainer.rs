@@ -53,9 +53,15 @@ pub fn exec_devcontainer(
     }
 
     // Add additional features if configured
-    for (feature, value) in &config.additional_features {
+    if !config.additional_features.is_empty() {
+        let additional_features_string: &String = &config
+            .additional_features
+            .iter()
+            .map(|(f, v)| format!("\"{f}\": {v}"))
+            .collect::<Vec<String>>()
+            .join(", ");
         cmd.arg("--additional-features")
-            .arg(format!("{feature}={value}"));
+            .arg(format!("{{ {additional_features_string} }}"));
     }
 
     let output = cmd.output()?;
