@@ -337,7 +337,7 @@ fn handle_envs_command(
                 .and_then(|c| c.parse::<config::DevContainerContext>().ok())
                 .unwrap_or(config::DevContainerContext::default());
             config_manager.add_env(config, name.clone(), value.clone(), Some(context.clone()))?;
-            println!("✅ Added env: {name} = {value} (in context: {:?})", context);
+            println!("✅ Added env: {name} = {value} (in context: {context:?})");
         }
         EnvsCommands::Remove { index } => {
             let config = config_manager.load_or_create_config()?;
