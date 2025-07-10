@@ -49,9 +49,10 @@ pub struct AppConfigEnv {
     pub context: DevContainerContext,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum DevContainerContext {
     #[serde(rename = "all")]
+    #[default]
     All,
     #[serde(rename = "up")]
     Up,
@@ -59,11 +60,6 @@ pub enum DevContainerContext {
     Exec,
 }
 
-impl Default for DevContainerContext {
-    fn default() -> Self {
-        DevContainerContext::All
-    }
-}
 impl FromStr for DevContainerContext {
     type Err = ();
 
@@ -196,7 +192,7 @@ impl ConfigManager {
         config.env.push(AppConfigEnv {
             name: env_name,
             value: env_value,
-            context: env.unwrap_or(DevContainerContext::default()),
+            context: env.unwrap_or_default(),
         });
         self.save_config(&config)?;
         Ok(config)
@@ -352,7 +348,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            updated_config.env.get(0),
+            updated_config.env.first(),
             Some(&AppConfigEnv {
                 name: env,
                 value,
@@ -377,7 +373,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            updated_config2.env.get(0),
+            updated_config2.env.first(),
             Some(&AppConfigEnv {
                 name: env,
                 value,
