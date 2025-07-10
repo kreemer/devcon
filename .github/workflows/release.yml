@@ -29,6 +29,9 @@ on:
 env:
   CARGO_TERM_COLOR: always
 
+permissions:
+  contents: write
+
 jobs:
   build-and-upload:
     name: Build and Upload
@@ -83,61 +86,10 @@ jobs:
           asset_name: ${{ matrix.asset_name }}
           asset_content_type: application/octet-stream
 
-  build-universal-macos:
-    name: Build Universal macOS Binary
-    runs-on: macos-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-apple-darwin,aarch64-apple-darwin
-
-      - name: Cache Cargo dependencies
-        uses: actions/cache@v3
-        with:
-          path: |
-            ~/.cargo/bin/
-            ~/.cargo/registry/index/
-            ~/.cargo/registry/cache/
-            ~/.cargo/git/db/
-            target/
-          key: ${{ runner.os }}-universal-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: |
-            ${{ runner.os }}-universal-cargo-
-
-      - name: Build for x86_64
-        run: cargo build --release --target x86_64-apple-darwin
-
-      - name: Build for aarch64
-        run: cargo build --release --target aarch64-apple-darwin
-
-      - name: Create universal binary
-        run: |
-          lipo -create \
-            target/x86_64-apple-darwin/release/devcon \
-            target/aarch64-apple-darwin/release/devcon \
-            -output devcon-universal
-
-      - name: Strip universal binary
-        run: strip devcon-universal
-
-      - name: Upload universal macOS release asset
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: devcon-universal
-          asset_name: devcon-macos-universal
-          asset_content_type: application/octet-stream
-
   create-checksums:
     name: Create Checksums
     runs-on: ubuntu-latest
-    needs: [build-and-upload, build-universal-macos]
+    needs: [build-and-upload]
     steps:
       - name: Download release assets
         uses: actions/github-script@v7
