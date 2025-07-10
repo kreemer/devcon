@@ -107,11 +107,7 @@ impl TuiApp {
             .iter()
             .enumerate()
             .map(|(i, path)| {
-                let display_name = path
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| path.to_string_lossy().to_string());
+                let display_name = path.to_string_lossy();
 
                 format!("{:2}. {}", i + 1, display_name)
             })
