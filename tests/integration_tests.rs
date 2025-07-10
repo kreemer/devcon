@@ -1,7 +1,6 @@
-use devcon::{AppConfig, ConfigManager};
+use devcon::ConfigManager;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
 use tempfile::TempDir;
 
 #[test]
