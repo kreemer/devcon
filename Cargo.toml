@@ -2,6 +2,15 @@
 name = "devcon"
 version = "0.1.0"
 edition = "2024"
+license = "MIT"
+description = "A blazingly fast TUI application for managing and launching development containers"
+repository = "https://github.com/kreemer/devcon"
+homepage = "https://github.com/kreemer/devcon"
+documentation = "https://github.com/kreemer/devcon"
+readme = "README.md"
+keywords = ["devcontainer", "tui", "development", "container", "cli"]
+categories = ["command-line-utilities", "development-tools"]
+authors = ["DevCon Contributors"]
 
 [dependencies]
 clap = { version = "4.5.41", features = ["derive"] }
