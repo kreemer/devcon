@@ -194,6 +194,7 @@ mod tests {
             recent_paths: vec![],
             dotfiles_repo: None,
             additional_features: std::collections::HashMap::new(),
+            env: vec![],
         };
 
         let result = app.run(&empty_config);
