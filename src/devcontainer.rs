@@ -1,7 +1,9 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-pub fn exec_devcontainer(path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+use crate::config::AppConfig;
+
+pub fn exec_devcontainer(path: &PathBuf, config: &AppConfig) -> Result<(), Box<dyn std::error::Error>> {
     println!("Starting devcontainer for: {}", path.display());
 
     // Check if the path has a .devcontainer directory or devcontainer.json
@@ -16,12 +18,22 @@ pub fn exec_devcontainer(path: &PathBuf) -> Result<(), Box<dyn std::error::Error
         .into());
     }
 
-    // Use devcontainer CLI to start the container
-    let output = Command::new("devcontainer")
-        .arg("up")
-        .arg("--workspace-folder")
-        .arg(path)
-        .output()?;
+    // Build devcontainer command
+    let mut cmd = Command::new("devcontainer");
+    cmd.arg("up").arg("--workspace-folder").arg(path);
+
+    // Add dotfiles repository if configured
+    if let Some(ref dotfiles_repo) = config.dotfiles_repo {
+        cmd.arg("--dotfiles-repository").arg(dotfiles_repo);
+    }
+
+    // Add additional features if configured
+    for (feature, value) in &config.additional_features {
+        cmd.arg("--additional-features")
+           .arg(format!("{}={}", feature, value));
+    }
+
+    let output = cmd.output()?;
 
     if !output.status.success() {
         let error = String::from_utf8_lossy(&output.stderr);
@@ -57,7 +69,8 @@ mod tests {
     #[test]
     fn test_exec_devcontainer_no_devcontainer_config() {
         let temp_dir = TempDir::new().unwrap();
-        let result = exec_devcontainer(&temp_dir.path().to_path_buf());
+        let config = AppConfig::default();
+        let result = exec_devcontainer(&temp_dir.path().to_path_buf(), &config);
 
         assert!(result.is_err());
         assert!(
@@ -73,9 +86,10 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let devcontainer_path = temp_dir.path().join(".devcontainer");
         fs::create_dir(&devcontainer_path).unwrap();
+        let config = AppConfig::default();
 
         // This test will fail if devcontainer CLI is not installed, which is expected
-        let result = exec_devcontainer(&temp_dir.path().to_path_buf());
+        let result = exec_devcontainer(&temp_dir.path().to_path_buf(), &config);
 
         // We can't easily test the actual command execution without devcontainer CLI installed
         // but we can test that it doesn't fail due to missing .devcontainer directory
@@ -90,9 +104,49 @@ mod tests {
         let temp_dir = TempDir::new().unwrap();
         let devcontainer_file = temp_dir.path().join("devcontainer.json");
         fs::write(&devcontainer_file, "{}").unwrap();
+        let config = AppConfig::default();
 
         // This test will fail if devcontainer CLI is not installed, which is expected
-        let result = exec_devcontainer(&temp_dir.path().to_path_buf());
+        let result = exec_devcontainer(&temp_dir.path().to_path_buf(), &config);
+
+        // We can test that it doesn't fail due to missing devcontainer config
+        if result.is_err() {
+            let error_msg = result.unwrap_err().to_string();
+            assert!(!error_msg.contains("No .devcontainer directory or devcontainer.json found"));
+        }
+    }
+
+    #[test]
+    fn test_exec_devcontainer_with_dotfiles() {
+        let temp_dir = TempDir::new().unwrap();
+        let devcontainer_file = temp_dir.path().join("devcontainer.json");
+        fs::write(&devcontainer_file, "{}").unwrap();
+        
+        let mut config = AppConfig::default();
+        config.dotfiles_repo = Some("https://github.com/user/dotfiles".to_string());
+
+        // This test will fail if devcontainer CLI is not installed, which is expected
+        let result = exec_devcontainer(&temp_dir.path().to_path_buf(), &config);
+
+        // We can test that it doesn't fail due to missing devcontainer config
+        if result.is_err() {
+            let error_msg = result.unwrap_err().to_string();
+            assert!(!error_msg.contains("No .devcontainer directory or devcontainer.json found"));
+        }
+    }
+
+    #[test]
+    fn test_exec_devcontainer_with_additional_features() {
+        let temp_dir = TempDir::new().unwrap();
+        let devcontainer_file = temp_dir.path().join("devcontainer.json");
+        fs::write(&devcontainer_file, "{}").unwrap();
+        
+        let mut config = AppConfig::default();
+        config.additional_features.insert("ghcr.io/devcontainers/features/github-cli:1".to_string(), "latest".to_string());
+        config.additional_features.insert("ghcr.io/devcontainers/features/docker-in-docker:2".to_string(), "20.10".to_string());
+
+        // This test will fail if devcontainer CLI is not installed, which is expected
+        let result = exec_devcontainer(&temp_dir.path().to_path_buf(), &config);
 
         // We can test that it doesn't fail due to missing devcontainer config
         if result.is_err() {

@@ -5,6 +5,8 @@ use std::path::PathBuf;
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub recent_paths: Vec<PathBuf>,
+    pub dotfiles_repo: Option<String>,
+    pub additional_features: std::collections::HashMap<String, String>,
 }
 
 pub struct ConfigManager {
@@ -74,6 +76,48 @@ impl ConfigManager {
 
         Ok(config)
     }
+
+    pub fn set_dotfiles_repo(
+        &self,
+        mut config: AppConfig,
+        dotfiles_repo: Option<String>,
+    ) -> Result<AppConfig, Box<dyn std::error::Error>> {
+        config.dotfiles_repo = dotfiles_repo;
+        self.save_config(&config)?;
+        Ok(config)
+    }
+
+    pub fn add_feature(
+        &self,
+        mut config: AppConfig,
+        feature_name: String,
+        feature_value: String,
+    ) -> Result<AppConfig, Box<dyn std::error::Error>> {
+        config
+            .additional_features
+            .insert(feature_name, feature_value);
+        self.save_config(&config)?;
+        Ok(config)
+    }
+
+    pub fn remove_feature(
+        &self,
+        mut config: AppConfig,
+        feature_name: String,
+    ) -> Result<AppConfig, Box<dyn std::error::Error>> {
+        config.additional_features.remove(&feature_name);
+        self.save_config(&config)?;
+        Ok(config)
+    }
+
+    pub fn clear_features(
+        &self,
+        mut config: AppConfig,
+    ) -> Result<AppConfig, Box<dyn std::error::Error>> {
+        config.additional_features.clear();
+        self.save_config(&config)?;
+        Ok(config)
+    }
 }
 
 #[cfg(test)]
@@ -136,5 +180,48 @@ mod tests {
             .unwrap();
 
         assert_eq!(config.recent_paths.len(), 1);
+    }
+
+    #[test]
+    fn test_dotfiles_configuration() {
+        let temp_dir = TempDir::new().unwrap();
+        unsafe {
+            env::set_var("XDG_CONFIG_HOME", temp_dir.path());
+        }
+
+        let config_manager = ConfigManager::new().unwrap();
+        let config = config_manager.load_or_create_config().unwrap();
+
+        let dotfiles_repo = "https://github.com/user/dotfiles".to_string();
+        let updated_config = config_manager
+            .set_dotfiles_repo(config, Some(dotfiles_repo.clone()))
+            .unwrap();
+
+        assert_eq!(updated_config.dotfiles_repo, Some(dotfiles_repo));
+    }
+
+    #[test]
+    fn test_features_configuration() {
+        let temp_dir = TempDir::new().unwrap();
+        unsafe {
+            env::set_var("XDG_CONFIG_HOME", temp_dir.path());
+        }
+
+        let config_manager = ConfigManager::new().unwrap();
+        let config = config_manager.load_or_create_config().unwrap();
+
+        let feature = "ghcr.io/devcontainers/features/github-cli:1".to_string();
+        let value = "latest".to_string();
+        let updated_config = config_manager
+            .add_feature(config, feature.clone(), value.clone())
+            .unwrap();
+
+        assert_eq!(
+            updated_config.additional_features.get(&feature),
+            Some(&value)
+        );
+
+        let cleared_config = config_manager.clear_features(updated_config).unwrap();
+        assert!(cleared_config.additional_features.is_empty());
     }
 }

@@ -174,6 +174,8 @@ mod tests {
         let mut app = TuiApp::new();
         let empty_config = AppConfig {
             recent_paths: vec![],
+            dotfiles_repo: None,
+            additional_features: std::collections::HashMap::new(),
         };
 
         let result = app.run(&empty_config);
