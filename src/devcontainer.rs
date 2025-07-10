@@ -23,7 +23,7 @@
 use std::path::PathBuf;
 use std::process::Command;
 
-use crate::config::AppConfig;
+use crate::config::{AppConfig, DevContainerContext};
 
 pub fn exec_devcontainer(
     path: &PathBuf,
@@ -62,6 +62,12 @@ pub fn exec_devcontainer(
             .join(", ");
         cmd.arg("--additional-features")
             .arg(format!("{{ {additional_features_string} }}"));
+    }
+
+    // Add variables to build and up context
+    for env in config.list_env_by_context(DevContainerContext::Up) {
+        cmd.arg("--remote-env")
+            .arg(format!("{}={}", env.name, env.value));
     }
 
     let output = cmd.output()?;

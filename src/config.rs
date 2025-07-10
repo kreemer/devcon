@@ -23,12 +23,58 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
     pub recent_paths: Vec<PathBuf>,
     pub dotfiles_repo: Option<String>,
     pub additional_features: std::collections::HashMap<String, String>,
+    pub env: Vec<AppConfigEnv>,
+}
+
+impl AppConfig {
+    pub fn list_env_by_context(&self, context: DevContainerContext) -> Vec<&AppConfigEnv> {
+        self.env
+            .iter()
+            .filter(|env| env.context == context || env.context == DevContainerContext::All)
+            .collect()
+    }
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AppConfigEnv {
+    pub name: String,
+    pub value: String,
+    pub context: DevContainerContext,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub enum DevContainerContext {
+    #[serde(rename = "all")]
+    All,
+    #[serde(rename = "up")]
+    Up,
+    #[serde(rename = "exec")]
+    Exec,
+}
+
+impl Default for DevContainerContext {
+    fn default() -> Self {
+        DevContainerContext::All
+    }
+}
+impl FromStr for DevContainerContext {
+    type Err = ();
+
+    fn from_str(input: &str) -> Result<DevContainerContext, Self::Err> {
+        match input {
+            "all" => Ok(DevContainerContext::All),
+            "up" => Ok(DevContainerContext::Up),
+            "exec" => Ok(DevContainerContext::Exec),
+            _ => Err(()),
+        }
+    }
 }
 
 pub struct ConfigManager {
@@ -140,6 +186,43 @@ impl ConfigManager {
         self.save_config(&config)?;
         Ok(config)
     }
+    pub fn add_env(
+        &self,
+        mut config: AppConfig,
+        env_name: String,
+        env_value: String,
+        env: Option<DevContainerContext>,
+    ) -> Result<AppConfig, Box<dyn std::error::Error>> {
+        config.env.push(AppConfigEnv {
+            name: env_name,
+            value: env_value,
+            context: env.unwrap_or(DevContainerContext::default()),
+        });
+        self.save_config(&config)?;
+        Ok(config)
+    }
+
+    pub fn remove_env(
+        &self,
+        mut config: AppConfig,
+        index: usize,
+    ) -> Result<AppConfig, Box<dyn std::error::Error>> {
+        if index >= config.env.len() {
+            return Err("Index out of bounds".into());
+        }
+        config.env.swap_remove(index);
+        self.save_config(&config)?;
+        Ok(config)
+    }
+
+    pub fn clear_env(
+        &self,
+        mut config: AppConfig,
+    ) -> Result<AppConfig, Box<dyn std::error::Error>> {
+        config.env.clear();
+        self.save_config(&config)?;
+        Ok(config)
+    }
 }
 
 #[cfg(test)]
@@ -245,5 +328,121 @@ mod tests {
 
         let cleared_config = config_manager.clear_features(updated_config).unwrap();
         assert!(cleared_config.additional_features.is_empty());
+    }
+
+    #[test]
+    fn test_env_configuration() {
+        let temp_dir = TempDir::new().unwrap();
+        unsafe {
+            env::set_var("XDG_CONFIG_HOME", temp_dir.path());
+        }
+
+        let config_manager = ConfigManager::new().unwrap();
+        let config = config_manager.load_or_create_config().unwrap();
+
+        let env = "CODESPACES".to_string();
+        let value = "true".to_string();
+        let updated_config = config_manager
+            .add_env(
+                config,
+                env.clone(),
+                value.clone(),
+                Some(DevContainerContext::Exec),
+            )
+            .unwrap();
+
+        assert_eq!(
+            updated_config.env.get(0),
+            Some(&AppConfigEnv {
+                name: env,
+                value,
+                context: DevContainerContext::Exec,
+            })
+        );
+
+        let removed_config = config_manager
+            .remove_env(updated_config.clone(), 0)
+            .unwrap();
+        assert!(removed_config.env.is_empty());
+
+        let env = "CODESPACES".to_string();
+        let value = "true".to_string();
+        let updated_config2 = config_manager
+            .add_env(
+                updated_config,
+                env.clone(),
+                value.clone(),
+                Some(DevContainerContext::Exec),
+            )
+            .unwrap();
+
+        assert_eq!(
+            updated_config2.env.get(0),
+            Some(&AppConfigEnv {
+                name: env,
+                value,
+                context: DevContainerContext::Exec,
+            })
+        );
+
+        let cleared_config = config_manager.clear_env(updated_config2).unwrap();
+        assert!(cleared_config.env.is_empty());
+
+        let removed2_config = config_manager.remove_env(cleared_config.clone(), 0);
+        assert!(removed2_config.is_err());
+    }
+
+    #[test]
+    fn test_list_env_by_context() {
+        let mut config = AppConfig::default();
+
+        // Add environment variables with different contexts
+        config.env.push(AppConfigEnv {
+            name: "GLOBAL_VAR".to_string(),
+            value: "global_value".to_string(),
+            context: DevContainerContext::All,
+        });
+
+        config.env.push(AppConfigEnv {
+            name: "UP_VAR".to_string(),
+            value: "up_value".to_string(),
+            context: DevContainerContext::Up,
+        });
+
+        config.env.push(AppConfigEnv {
+            name: "EXEC_VAR".to_string(),
+            value: "exec_value".to_string(),
+            context: DevContainerContext::Exec,
+        });
+
+        config.env.push(AppConfigEnv {
+            name: "ANOTHER_GLOBAL".to_string(),
+            value: "another_global_value".to_string(),
+            context: DevContainerContext::All,
+        });
+
+        // Test filtering by Up context - should return All + Up
+        let up_env = config.list_env_by_context(DevContainerContext::Up);
+        assert_eq!(up_env.len(), 3);
+        assert!(up_env.iter().any(|env| env.name == "GLOBAL_VAR"));
+        assert!(up_env.iter().any(|env| env.name == "UP_VAR"));
+        assert!(up_env.iter().any(|env| env.name == "ANOTHER_GLOBAL"));
+        assert!(!up_env.iter().any(|env| env.name == "EXEC_VAR"));
+
+        // Test filtering by Exec context - should return All + Exec
+        let exec_env = config.list_env_by_context(DevContainerContext::Exec);
+        assert_eq!(exec_env.len(), 3);
+        assert!(exec_env.iter().any(|env| env.name == "GLOBAL_VAR"));
+        assert!(exec_env.iter().any(|env| env.name == "EXEC_VAR"));
+        assert!(exec_env.iter().any(|env| env.name == "ANOTHER_GLOBAL"));
+        assert!(!exec_env.iter().any(|env| env.name == "UP_VAR"));
+
+        // Test filtering by All context - should return only All
+        let all_env = config.list_env_by_context(DevContainerContext::All);
+        assert_eq!(all_env.len(), 2);
+        assert!(all_env.iter().any(|env| env.name == "GLOBAL_VAR"));
+        assert!(all_env.iter().any(|env| env.name == "ANOTHER_GLOBAL"));
+        assert!(!all_env.iter().any(|env| env.name == "UP_VAR"));
+        assert!(!all_env.iter().any(|env| env.name == "EXEC_VAR"));
     }
 }

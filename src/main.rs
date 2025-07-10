@@ -71,6 +71,12 @@ enum ConfigCommands {
     /// Manage additional features configuration
     #[command(subcommand, about = "Configure additional features for devcontainers")]
     Features(FeaturesCommands),
+    /// Manage additional features configuration
+    #[command(
+        subcommand,
+        about = "Configure additional env variables for devcontainers"
+    )]
+    Envs(EnvsCommands),
 }
 
 #[derive(Subcommand)]
@@ -114,6 +120,36 @@ enum FeaturesCommands {
     List,
     /// Clear all additional features
     #[command(about = "Clear all additional features")]
+    Clear,
+}
+
+#[derive(Subcommand)]
+enum EnvsCommands {
+    /// Add an additional feature
+    #[command(about = "Add an additional env variable")]
+    Add {
+        /// Env name (e.g., PATH)
+        #[arg(help = "The env identifier")]
+        name: String,
+        /// Env variable value
+        #[arg(help = "The env variable value")]
+        value: String,
+        /// Context for the env variable
+        #[arg(help = "The context for the env variable (all, up or exec)")]
+        context: Option<String>,
+    },
+    /// Remove an additional feature
+    #[command(about = "Remove an env variable")]
+    Remove {
+        /// Feature name to remove
+        #[arg(help = "The env index to remove")]
+        index: usize,
+    },
+    /// List all configured env variables
+    #[command(about = "List all configured env variables")]
+    List,
+    /// Clear all env variables
+    #[command(about = "Clear all env variables")]
     Clear,
 }
 
@@ -217,6 +253,9 @@ fn handle_config_command(
         ConfigCommands::Features(features_cmd) => {
             handle_features_command(config_manager, features_cmd)?;
         }
+        ConfigCommands::Envs(envs_cmd) => {
+            handle_envs_command(config_manager, envs_cmd)?;
+        }
     }
     Ok(())
 }
@@ -277,6 +316,52 @@ fn handle_features_command(
             let config = config_manager.load_or_create_config()?;
             config_manager.clear_features(config)?;
             println!("✅ All additional features cleared");
+        }
+    }
+    Ok(())
+}
+
+fn handle_envs_command(
+    config_manager: &ConfigManager,
+    envs_cmd: &EnvsCommands,
+) -> Result<(), Box<dyn std::error::Error>> {
+    match envs_cmd {
+        EnvsCommands::Add {
+            name,
+            value,
+            context,
+        } => {
+            let config = config_manager.load_or_create_config()?;
+            let context = context
+                .as_ref()
+                .and_then(|c| c.parse::<config::DevContainerContext>().ok())
+                .unwrap_or(config::DevContainerContext::default());
+            config_manager.add_env(config, name.clone(), value.clone(), Some(context.clone()))?;
+            println!("✅ Added env: {name} = {value} (in context: {:?})", context);
+        }
+        EnvsCommands::Remove { index } => {
+            let config = config_manager.load_or_create_config()?;
+            config_manager.remove_env(config, *index)?;
+            println!("✅ Removed env: {index}");
+        }
+        EnvsCommands::List => {
+            let config = config_manager.load_or_create_config()?;
+            if config.env.is_empty() {
+                println!("No additional env vars found");
+            } else {
+                println!("Configured additional env vars:");
+                for env in &config.env {
+                    println!(
+                        "  {} = {} (in context: {:?})",
+                        env.name, env.value, env.context
+                    );
+                }
+            }
+        }
+        EnvsCommands::Clear => {
+            let config = config_manager.load_or_create_config()?;
+            config_manager.clear_env(config)?;
+            println!("✅ All envs cleared");
         }
     }
     Ok(())
