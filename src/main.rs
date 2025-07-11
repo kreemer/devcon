@@ -25,7 +25,12 @@ mod devcontainer;
 mod tui;
 
 use clap::{Parser, Subcommand};
+use std::fs;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
+use std::process::Command;
+use std::thread;
 
 use config::ConfigManager;
 use devcontainer::{check_devcontainer_cli, shell_devcontainer, up_devcontainer};
@@ -68,6 +73,21 @@ enum Commands {
     /// Check if the required tools are available
     #[command(about = "Check if DevContainer CLI is properly installed and available")]
     Check,
+    /// Start a socket server for browser integration
+    #[command(
+        about = "Start a socket server that allows containers to open URLs in the host browser"
+    )]
+    Socket {
+        /// Socket path (optional, defaults to ~/.devcon/browser.sock)
+        #[arg(
+            help = "Path to the socket file. If not provided, uses ~/.devcon/browser.sock",
+            value_name = "SOCKET_PATH"
+        )]
+        socket_path: Option<PathBuf>,
+        /// Run in daemon mode (background)
+        #[arg(short, long, help = "Run the socket server in daemon mode")]
+        daemon: bool,
+    },
     /// Manage configuration settings
     #[command(subcommand, about = "Manage configuration settings for DevCon")]
     Config(ConfigCommands),
@@ -176,6 +196,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Commands::Check) => {
             handle_check_command()?;
+        }
+        Some(Commands::Socket {
+            socket_path,
+            daemon,
+        }) => {
+            handle_socket_command(socket_path.as_ref(), *daemon)?;
         }
         Some(Commands::Config(config_cmd)) => {
             handle_config_command(&config_manager, config_cmd)?;
@@ -405,5 +431,132 @@ fn handle_envs_command(
             println!("✅ All envs cleared");
         }
     }
+    Ok(())
+}
+
+fn handle_socket_command(
+    socket_path: Option<&PathBuf>,
+    daemon: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let socket_path = socket_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+        PathBuf::from(home).join(".devcon").join("browser.sock")
+    });
+
+    // Ensure parent directory exists
+    if let Some(parent) = socket_path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+
+    // Remove existing socket if it exists
+    if socket_path.exists() {
+        fs::remove_file(&socket_path)?;
+    }
+
+    if daemon {
+        println!(
+            "Starting socket server in daemon mode at: {}",
+            socket_path.display()
+        );
+        // For daemon mode, we could use a proper daemon library, but for now we'll just fork
+        match unsafe { libc::fork() } {
+            -1 => return Err("Failed to fork process".into()),
+            0 => {
+                // Child process
+                start_socket_server(&socket_path)?;
+            }
+            _pid => {
+                // Parent process
+                println!("✅ Socket server started in background");
+                return Ok(());
+            }
+        }
+    } else {
+        println!("Starting socket server at: {}", socket_path.display());
+        println!("Press Ctrl+C to stop the server");
+        start_socket_server(&socket_path)?;
+    }
+
+    Ok(())
+}
+
+fn start_socket_server(socket_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let listener = UnixListener::bind(socket_path)?;
+
+    // Set socket permissions to be readable/writable by owner and group
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(socket_path)?.permissions();
+        perms.set_mode(0o660);
+        fs::set_permissions(socket_path, perms)?;
+    }
+
+    println!("Socket server listening on: {}", socket_path.display());
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                thread::spawn(move || {
+                    if let Err(e) = handle_client(stream) {
+                        eprintln!("Error handling client: {e}");
+                    }
+                });
+            }
+            Err(e) => {
+                eprintln!("Error accepting connection: {e}");
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn handle_client(mut stream: UnixStream) -> Result<(), Box<dyn std::error::Error>> {
+    let mut reader = BufReader::new(&stream);
+    let mut line = String::new();
+
+    reader.read_line(&mut line)?;
+    let url = line.trim();
+
+    if url.is_empty() {
+        return Err("Empty URL received".into());
+    }
+
+    println!("Received request to open URL: {url}");
+
+    // Try to open the URL using the system's default browser
+    let result = if cfg!(target_os = "macos") {
+        Command::new("open").arg(url).output()
+    } else if cfg!(target_os = "windows") {
+        Command::new("cmd").args(["/c", "start", url]).output()
+    } else {
+        // Linux and other Unix-like systems
+        // Try xdg-open first, then fallback to other options
+        Command::new("xdg-open")
+            .arg(url)
+            .output()
+            .or_else(|_| Command::new("firefox").arg(url).output())
+            .or_else(|_| Command::new("google-chrome").arg(url).output())
+            .or_else(|_| Command::new("chromium").arg(url).output())
+    };
+
+    match result {
+        Ok(output) => {
+            if output.status.success() {
+                println!("✅ Successfully opened URL: {url}");
+                stream.write_all(b"SUCCESS\n")?;
+            } else {
+                let error_msg = String::from_utf8_lossy(&output.stderr);
+                eprintln!("❌ Failed to open URL: {error_msg}");
+                stream.write_all(b"ERROR\n")?;
+            }
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to execute browser command: {e}");
+            stream.write_all(b"ERROR\n")?;
+        }
+    }
+
     Ok(())
 }

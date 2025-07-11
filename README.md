@@ -96,7 +96,9 @@ devcon config features clear
 |---------|-------------|
 | `devcon` | Launch TUI mode to select from recent projects |
 | `devcon open [PATH]` | Open a development container for the specified path |
+| `devcon shell [PATH]` | Execute a shell in a development container |
 | `devcon check` | Verify DevContainer CLI installation |
+| `devcon socket [--daemon]` | Start socket server for browser integration |
 | `devcon config dotfiles set <URL>` | Set dotfiles repository URL |
 | `devcon config dotfiles show` | Show current dotfiles configuration |
 | `devcon config dotfiles clear` | Remove dotfiles configuration |
@@ -119,6 +121,35 @@ additional_features:
   ghcr.io/devcontainers/features/github-cli:1: latest
   ghcr.io/devcontainers/features/docker-in-docker:2: "20.10"
 ```
+
+### Browser Integration
+
+DevCon includes a browser integration feature that allows you to open URLs in your host's default browser from within a devcontainer.
+
+#### Quick Start
+
+1. **Start the socket server** (on your host):
+   ```bash
+   devcon socket --daemon
+   ```
+
+2. **Start your devcontainer** (the socket is automatically mounted):
+   ```bash
+   devcon open /path/to/your/project
+   ```
+
+3. **Open URLs from inside the container**:
+   ```bash
+   # Copy the helper script to your container
+   curl -o /usr/local/bin/devcon-browser https://raw.githubusercontent.com/kreemer/devcon/main/scripts/devcon-browser.sh
+   chmod +x /usr/local/bin/devcon-browser
+   
+   # Open URLs
+   devcon-browser https://github.com
+   devcon-browser http://localhost:3000
+   ```
+
+For detailed information, see [Browser Integration Guide](docs/BROWSER_INTEGRATION.md).
 
 ## 🏗 Development
 
