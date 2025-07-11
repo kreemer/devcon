@@ -20,6 +20,8 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::{path::PathBuf, process::Stdio};
 
@@ -35,6 +37,71 @@ fn get_socket_path() -> PathBuf {
                 .place_data_file("browser.sock")
                 .expect("Cannot create socket directory")
         })
+}
+
+fn get_helper_script_path() -> PathBuf {
+    let xdg_dirs = xdg::BaseDirectories::with_prefix("devcon");
+    xdg_dirs
+        .place_runtime_file("devcon-browser")
+        .unwrap_or_else(|_| {
+            // Fallback to data directory if runtime directory is not available
+            xdg_dirs
+                .place_data_file("devcon-browser")
+                .expect("Cannot create script directory")
+        })
+}
+
+fn ensure_helper_script_exists() -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let script_path = get_helper_script_path();
+
+    // Create the helper script content
+    let script_content = r#"#!/bin/bash
+# DevCon Browser Helper Script - Auto-generated
+# This script allows opening URLs in the host's default browser from within a devcontainer
+
+SOCKET_PATH="/tmp/devcon-browser.sock"
+
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 <url>"
+    echo "Example: $0 https://github.com"
+    exit 1
+fi
+
+URL="$1"
+
+if [ ! -S "$SOCKET_PATH" ]; then
+    echo "Error: DevCon browser socket not found at $SOCKET_PATH"
+    echo "Make sure the devcon socket server is running on the host:"
+    echo "  devcon socket --daemon"
+    echo "The socket is typically located in your XDG runtime directory on the host."
+    exit 1
+fi
+
+# Send the URL to the socket
+echo "$URL" | nc -U "$SOCKET_PATH" 2>/dev/null || {
+    echo "Error: Failed to send URL to socket. Is netcat (nc) installed?"
+    exit 1
+}
+"#;
+
+    // Write the script if it doesn't exist or is outdated
+    if !script_path.exists()
+        || fs::read_to_string(&script_path).map_or(true, |content| content != script_content)
+    {
+        // Ensure parent directory exists
+        if let Some(parent) = script_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        fs::write(&script_path, script_content)?;
+
+        // Make it executable
+        let mut perms = fs::metadata(&script_path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms)?;
+    }
+
+    Ok(script_path)
 }
 
 pub fn up_devcontainer(
@@ -64,6 +131,19 @@ pub fn up_devcontainer(
             "type=bind,source={},target=/tmp/devcon-browser.sock",
             socket_path.display()
         ));
+
+        // Also mount the helper script if socket exists
+        match ensure_helper_script_exists() {
+            Ok(script_path) => {
+                cmd.arg("--mount").arg(format!(
+                    "type=bind,source={},target=/usr/local/bin/devcon-browser",
+                    script_path.display()
+                ));
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to create helper script: {e}");
+            }
+        }
     }
 
     // Add dotfiles repository if configured
@@ -131,12 +211,30 @@ pub fn shell_devcontainer(
             "type=bind,source={},target=/tmp/devcon-browser.sock",
             socket_path.display()
         ));
+
+        // Also mount the helper script if socket exists
+        match ensure_helper_script_exists() {
+            Ok(script_path) => {
+                cmd.arg("--mount").arg(format!(
+                    "type=bind,source={},target=/usr/local/bin/devcon-browser",
+                    script_path.display()
+                ));
+            }
+            Err(e) => {
+                eprintln!("Warning: Failed to create helper script: {e}");
+            }
+        }
     }
 
     // Add variables to build and up context
     for env in config.list_env_by_context(DevContainerContext::Exec) {
         cmd.arg("--remote-env")
             .arg(format!("{}={}", env.name, env.value));
+    }
+
+    // Set BROWSER environment variable if socket exists
+    if socket_path.exists() {
+        cmd.arg("--remote-env").arg("BROWSER=devcon-browser");
     }
 
     cmd.arg("zsh");

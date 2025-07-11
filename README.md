@@ -125,7 +125,7 @@ additional_features:
 
 ### Browser Integration
 
-DevCon includes a browser integration feature that allows you to open URLs in your host's default browser from within a devcontainer.
+DevCon includes a seamless browser integration feature that allows you to open URLs in your host's default browser from within a devcontainer.
 
 #### Quick Start
 
@@ -134,20 +134,21 @@ DevCon includes a browser integration feature that allows you to open URLs in yo
    devcon socket --daemon
    ```
 
-2. **Start your devcontainer** (the socket is automatically mounted):
+2. **Start your devcontainer** (socket and helper script are automatically mounted):
    ```bash
    devcon open /path/to/your/project
    ```
 
-3. **Open URLs from inside the container**:
+3. **Open URLs from inside the container** (helper script is automatically available):
    ```bash
-   # Copy the helper script to your container
-   curl -o /usr/local/bin/devcon-browser https://raw.githubusercontent.com/kreemer/devcon/main/scripts/devcon-browser.sh
-   chmod +x /usr/local/bin/devcon-browser
-   
-   # Open URLs
+   # The helper script is automatically mounted at /usr/local/bin/devcon-browser
    devcon-browser https://github.com
    devcon-browser http://localhost:3000
+   
+   # Or use the BROWSER environment variable (automatically set in exec shells)
+   devcon shell /path/to/your/project
+   # Inside the container:
+   $BROWSER https://github.com
    
    # Find your socket path on the host
    devcon socket --show-path
