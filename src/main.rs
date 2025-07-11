@@ -78,15 +78,18 @@ enum Commands {
         about = "Start a socket server that allows containers to open URLs in the host browser"
     )]
     Socket {
-        /// Socket path (optional, defaults to ~/.devcon/browser.sock)
+        /// Socket path (optional, defaults to XDG runtime directory)
         #[arg(
-            help = "Path to the socket file. If not provided, uses ~/.devcon/browser.sock",
+            help = "Path to the socket file. If not provided, uses XDG runtime directory",
             value_name = "SOCKET_PATH"
         )]
         socket_path: Option<PathBuf>,
         /// Run in daemon mode (background)
         #[arg(short, long, help = "Run the socket server in daemon mode")]
         daemon: bool,
+        /// Show the default socket path and exit
+        #[arg(long, help = "Show the default socket path and exit")]
+        show_path: bool,
     },
     /// Manage configuration settings
     #[command(subcommand, about = "Manage configuration settings for DevCon")]
@@ -200,8 +203,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Socket {
             socket_path,
             daemon,
+            show_path,
         }) => {
-            handle_socket_command(socket_path.as_ref(), *daemon)?;
+            handle_socket_command(socket_path.as_ref(), *daemon, *show_path)?;
         }
         Some(Commands::Config(config_cmd)) => {
             handle_config_command(&config_manager, config_cmd)?;
@@ -437,11 +441,25 @@ fn handle_envs_command(
 fn handle_socket_command(
     socket_path: Option<&PathBuf>,
     daemon: bool,
+    show_path: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let socket_path = socket_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-        PathBuf::from(home).join(".devcon").join("browser.sock")
+        let xdg_dirs = xdg::BaseDirectories::with_prefix("devcon");
+        xdg_dirs
+            .place_runtime_file("browser.sock")
+            .unwrap_or_else(|_| {
+                // Fallback to data directory if runtime directory is not available
+                xdg_dirs
+                    .place_data_file("browser.sock")
+                    .expect("Cannot create socket directory")
+            })
     });
+
+    // If show_path is true, just print the path and exit
+    if show_path {
+        println!("{}", socket_path.display());
+        return Ok(());
+    }
 
     // Ensure parent directory exists
     if let Some(parent) = socket_path.parent() {

@@ -40,6 +40,7 @@ if [ ! -S "$SOCKET_PATH" ]; then
     echo "Error: DevCon browser socket not found at $SOCKET_PATH"
     echo "Make sure the devcon socket server is running on the host:"
     echo "  devcon socket --daemon"
+    echo "The socket is typically located in your XDG runtime directory on the host."
     exit 1
 fi
 

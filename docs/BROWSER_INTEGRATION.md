@@ -56,7 +56,7 @@ echo "https://github.com" | nc -U /tmp/devcon-browser.sock
 
 ## Socket Location
 
-- **Host**: `~/.devcon/browser.sock` (default)
+- **Host**: XDG runtime directory (typically `$XDG_RUNTIME_DIR/devcon/browser.sock` or `~/.local/share/devcon/browser.sock`)
 - **Container**: `/tmp/devcon-browser.sock`
 
 ## Requirements
@@ -75,10 +75,10 @@ echo "https://github.com" | nc -U /tmp/devcon-browser.sock
 
 ### Socket not found
 - Ensure the socket server is running: `devcon socket --daemon`
-- Check if the socket file exists: `ls -la ~/.devcon/browser.sock`
+- Check if the socket file exists in your XDG runtime directory
 
 ### Permission denied
-- Check socket permissions: `ls -la ~/.devcon/browser.sock`
+- Check socket permissions in your XDG runtime directory
 - Ensure your user has access to the socket file
 
 ### Browser not opening

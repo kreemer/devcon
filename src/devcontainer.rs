@@ -26,8 +26,15 @@ use std::{path::PathBuf, process::Stdio};
 use crate::config::{AppConfig, DevContainerContext};
 
 fn get_socket_path() -> PathBuf {
-    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
-    PathBuf::from(home).join(".devcon").join("browser.sock")
+    let xdg_dirs = xdg::BaseDirectories::with_prefix("devcon");
+    xdg_dirs
+        .place_runtime_file("browser.sock")
+        .unwrap_or_else(|_| {
+            // Fallback to data directory if runtime directory is not available
+            xdg_dirs
+                .place_data_file("browser.sock")
+                .expect("Cannot create socket directory")
+        })
 }
 
 pub fn up_devcontainer(
