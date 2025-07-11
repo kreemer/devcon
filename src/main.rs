@@ -28,7 +28,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
 use config::ConfigManager;
-use devcontainer::{check_devcontainer_cli, exec_devcontainer};
+use devcontainer::{check_devcontainer_cli, shell_devcontainer, up_devcontainer};
 use tui::TuiApp;
 
 #[derive(Parser)]
@@ -48,6 +48,16 @@ enum Commands {
     /// Open a development container for the specified path
     #[command(about = "Open a development container with the devcontainer CLI")]
     Open {
+        /// Path to the project directory containing .devcontainer configuration
+        #[arg(
+            help = "Path to the project directory. If not provided, uses current directory.",
+            value_name = "PATH"
+        )]
+        path: Option<PathBuf>,
+    },
+    /// Execs a shell in a development container for the specified path
+    #[command(about = "Exec a shell in a development container with the devcontainer CLI")]
+    Shell {
         /// Path to the project directory containing .devcontainer configuration
         #[arg(
             help = "Path to the project directory. If not provided, uses current directory.",
@@ -161,6 +171,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Open { path }) => {
             handle_open_command(&config_manager, path.as_ref())?;
         }
+        Some(Commands::Shell { path }) => {
+            handle_shell_command(&config_manager, path.as_ref())?;
+        }
         Some(Commands::Check) => {
             handle_check_command()?;
         }
@@ -199,7 +212,35 @@ fn handle_open_command(
     let updated_config = config_manager.add_recent_path(config, open_path.clone())?;
 
     // Execute devcontainer
-    exec_devcontainer(&updated_config.recent_paths[0], &updated_config)?;
+    up_devcontainer(&updated_config.recent_paths[0], &updated_config)?;
+
+    Ok(())
+}
+
+fn handle_shell_command(
+    config_manager: &ConfigManager,
+    path: Option<&PathBuf>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let open_path = path
+        .map(|p| p.to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("."));
+
+    if !open_path.exists() {
+        return Err(format!(
+            "The specified path '{}' does not exist.",
+            open_path.display()
+        )
+        .into());
+    }
+
+    // Convert to absolute path
+    let open_path = open_path.canonicalize()?;
+
+    // Load current config and add the new path
+    let config = config_manager.load_or_create_config()?;
+
+    // Execute devcontainer
+    shell_devcontainer(&open_path, &config)?;
 
     Ok(())
 }
@@ -229,7 +270,7 @@ fn handle_tui_mode(config_manager: &ConfigManager) -> Result<(), Box<dyn std::er
         Some(index) => {
             if let Some(path) = config.recent_paths.get(index) {
                 println!("Selected path: {}", path.display());
-                exec_devcontainer(path, &config)?;
+                up_devcontainer(path, &config)?;
             } else {
                 println!("Invalid selection.");
             }

@@ -20,17 +20,15 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use std::path::PathBuf;
 use std::process::Command;
+use std::{path::PathBuf, process::Stdio};
 
 use crate::config::{AppConfig, DevContainerContext};
 
-pub fn exec_devcontainer(
+pub fn up_devcontainer(
     path: &PathBuf,
     config: &AppConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    println!("Starting devcontainer for: {}", path.display());
-
     // Check if the path has a .devcontainer directory or devcontainer.json
     let devcontainer_dir = path.join(".devcontainer");
     let devcontainer_file = path.join("devcontainer.json");
@@ -82,6 +80,47 @@ pub fn exec_devcontainer(
     Ok(())
 }
 
+pub fn shell_devcontainer(
+    path: &PathBuf,
+    config: &AppConfig,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Check if the path has a .devcontainer directory or devcontainer.json
+    let devcontainer_dir = path.join(".devcontainer");
+    let devcontainer_file = path.join("devcontainer.json");
+
+    if !devcontainer_dir.exists() && !devcontainer_file.exists() {
+        return Err(format!(
+            "No .devcontainer directory or devcontainer.json found in {}",
+            path.display()
+        )
+        .into());
+    }
+
+    // Build devcontainer command
+    let mut cmd = Command::new("devcontainer");
+    cmd.stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit());
+    cmd.arg("exec").arg("--workspace-folder").arg(path);
+
+    // Add variables to build and up context
+    for env in config.list_env_by_context(DevContainerContext::Exec) {
+        cmd.arg("--remote-env")
+            .arg(format!("{}={}", env.name, env.value));
+    }
+
+    cmd.arg("zsh");
+
+    let output = cmd.output()?;
+
+    if !output.status.success() {
+        let error = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to up devcontainer: {error}").into());
+    }
+
+    Ok(())
+}
+
 pub fn check_devcontainer_cli() -> Result<(), Box<dyn std::error::Error>> {
     // Check if devcontainer CLI is available
     let output = Command::new("devcontainer").arg("--version").output();
@@ -104,10 +143,10 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn test_exec_devcontainer_no_devcontainer_config() {
+    fn test_up_devcontainer_no_devcontainer_config() {
         let temp_dir = TempDir::new().unwrap();
         let config = AppConfig::default();
-        let result = exec_devcontainer(&temp_dir.path().to_path_buf(), &config);
+        let result = up_devcontainer(&temp_dir.path().to_path_buf(), &config);
 
         assert!(result.is_err());
         assert!(
@@ -119,16 +158,16 @@ mod tests {
     }
 
     #[test]
-    fn test_exec_devcontainer_with_devcontainer_dir() {
+    fn test_up_devcontainer_with_devcontainer_dir() {
         let temp_dir = TempDir::new().unwrap();
         let devcontainer_path = temp_dir.path().join(".devcontainer");
         fs::create_dir(&devcontainer_path).unwrap();
         let config = AppConfig::default();
 
         // This test will fail if devcontainer CLI is not installed, which is expected
-        let result = exec_devcontainer(&temp_dir.path().to_path_buf(), &config);
+        let result = up_devcontainer(&temp_dir.path().to_path_buf(), &config);
 
-        // We can't easily test the actual command execution without devcontainer CLI installed
+        // We can't easily test the actual command upution without devcontainer CLI installed
         // but we can test that it doesn't fail due to missing .devcontainer directory
         if result.is_err() {
             let error_msg = result.unwrap_err().to_string();
@@ -137,14 +176,14 @@ mod tests {
     }
 
     #[test]
-    fn test_exec_devcontainer_with_devcontainer_json() {
+    fn test_up_devcontainer_with_devcontainer_json() {
         let temp_dir = TempDir::new().unwrap();
         let devcontainer_file = temp_dir.path().join("devcontainer.json");
         fs::write(&devcontainer_file, "{}").unwrap();
         let config = AppConfig::default();
 
         // This test will fail if devcontainer CLI is not installed, which is expected
-        let result = exec_devcontainer(&temp_dir.path().to_path_buf(), &config);
+        let result = up_devcontainer(&temp_dir.path().to_path_buf(), &config);
 
         // We can test that it doesn't fail due to missing devcontainer config
         if result.is_err() {
@@ -154,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn test_exec_devcontainer_with_dotfiles() {
+    fn test_up_devcontainer_with_dotfiles() {
         let temp_dir = TempDir::new().unwrap();
         let devcontainer_file = temp_dir.path().join("devcontainer.json");
         fs::write(&devcontainer_file, "{}").unwrap();
@@ -165,7 +204,7 @@ mod tests {
         };
 
         // This test will fail if devcontainer CLI is not installed, which is expected
-        let result = exec_devcontainer(&temp_dir.path().to_path_buf(), &config);
+        let result = up_devcontainer(&temp_dir.path().to_path_buf(), &config);
 
         // We can test that it doesn't fail due to missing devcontainer config
         if result.is_err() {
@@ -175,7 +214,7 @@ mod tests {
     }
 
     #[test]
-    fn test_exec_devcontainer_with_additional_features() {
+    fn test_up_devcontainer_with_additional_features() {
         let temp_dir = TempDir::new().unwrap();
         let devcontainer_file = temp_dir.path().join("devcontainer.json");
         fs::write(&devcontainer_file, "{}").unwrap();
@@ -191,7 +230,7 @@ mod tests {
         );
 
         // This test will fail if devcontainer CLI is not installed, which is expected
-        let result = exec_devcontainer(&temp_dir.path().to_path_buf(), &config);
+        let result = up_devcontainer(&temp_dir.path().to_path_buf(), &config);
 
         // We can test that it doesn't fail due to missing devcontainer config
         if result.is_err() {
