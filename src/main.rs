@@ -77,6 +77,13 @@ enum Commands {
             value_name = "PATH"
         )]
         path: Option<PathBuf>,
+
+        /// Environment variables which will be processed. Each should be denoted by KEY=VALUE
+        #[arg(
+            help = "Environment variables which will be processed. Each should be denoted by KEY=VALUE.",
+            value_name = "PATH"
+        )]
+        env: Vec<String>,
     },
     /// Check if the required tools are available
     #[command(about = "Check if DevContainer CLI is properly installed and available")]
@@ -213,8 +220,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Open { path }) => {
             handle_open_command(&config_manager, path.as_ref())?;
         }
-        Some(Commands::Shell { path }) => {
-            handle_shell_command(&config_manager, path.as_ref())?;
+        Some(Commands::Shell { path, env }) => {
+            handle_shell_command(&config_manager, path.as_ref(), env.as_ref())?;
         }
         Some(Commands::Check) => {
             handle_check_command()?;
@@ -269,6 +276,7 @@ fn handle_open_command(
 fn handle_shell_command(
     config_manager: &ConfigManager,
     path: Option<&PathBuf>,
+    env: &Vec<String>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let open_path = path
         .map(|p| p.to_path_buf())
@@ -289,7 +297,7 @@ fn handle_shell_command(
     let config = config_manager.load_or_create_config()?;
 
     // Execute devcontainer
-    shell_devcontainer(&open_path, &config)?;
+    shell_devcontainer(&open_path, env, &config)?;
 
     Ok(())
 }

@@ -168,6 +168,7 @@ pub fn up_devcontainer(
 
 pub fn shell_devcontainer(
     path: &PathBuf,
+    env_list: &Vec<String>,
     config: &AppConfig,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Check if the path has a .devcontainer directory or devcontainer.json
@@ -198,6 +199,10 @@ pub fn shell_devcontainer(
     for env in config.list_env_by_context(DevContainerContext::Exec) {
         cmd.arg("--remote-env")
             .arg(format!("{}={}", env.name, env.value));
+    }
+
+    for env in env_list {
+        cmd.arg("--remote-env").arg(format!("{}", env)); // Assuming env is in "NAME=VALUE" format
     }
 
     cmd.arg("zsh");
@@ -482,7 +487,7 @@ mod tests {
         fs::write(&socket_file, "").unwrap();
 
         // Test shell_devcontainer
-        let result = shell_devcontainer(&temp_dir.path().to_path_buf(), &config);
+        let result = shell_devcontainer(&temp_dir.path().to_path_buf(), &vec![], &config);
 
         // Should fail due to missing devcontainer CLI but not due to config issues
         assert!(result.is_err());
@@ -507,7 +512,7 @@ mod tests {
 
         // Test that commands work even without socket
         let result1 = up_devcontainer(&temp_dir.path().to_path_buf(), &config);
-        let result2 = shell_devcontainer(&temp_dir.path().to_path_buf(), &config);
+        let result2 = shell_devcontainer(&temp_dir.path().to_path_buf(), &vec![], &config);
 
         // Both should fail due to missing devcontainer CLI, not socket issues
         assert!(result1.is_err());
@@ -519,5 +524,35 @@ mod tests {
         // Should not contain socket-related errors
         assert!(!error1.contains("socket"));
         assert!(!error2.contains("socket"));
+    }
+
+    #[test]
+    fn test_browser_env_variable_list_in_shell_command() {
+        let temp_dir = TempDir::new().unwrap();
+        let config = AppConfig {
+            socket_path: temp_dir.path().to_path_buf(),
+            ..Default::default()
+        };
+
+        let devcontainer_file = temp_dir.path().join("devcontainer.json");
+        fs::write(&devcontainer_file, "{}").unwrap();
+
+        // Create a temporary socket file
+        let socket_dir = temp_dir.path().join("socket_test");
+        fs::create_dir_all(&socket_dir).unwrap();
+        let socket_file = socket_dir.join("browser.sock");
+        fs::write(&socket_file, "").unwrap();
+
+        // Test shell_devcontainer
+        let result = shell_devcontainer(
+            &temp_dir.path().to_path_buf(),
+            &vec!["A=B".to_string(), "C=D".to_string()],
+            &config,
+        );
+
+        // Should fail due to missing devcontainer CLI but not due to config issues
+        assert!(result.is_err());
+        let error_msg = result.unwrap_err().to_string();
+        assert!(!error_msg.contains("No .devcontainer directory or devcontainer.json found"));
     }
 }
