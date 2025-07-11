@@ -21,17 +21,13 @@
 // SOFTWARE.
 
 use devcon::ConfigManager;
-use std::env;
 use std::fs;
 use tempfile::TempDir;
 
 #[test]
 fn test_integration_config_workflow() {
     let temp_dir = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", temp_dir.path()) };
-
-    // Test creating a new config manager
-    let config_manager = ConfigManager::new().unwrap();
+    let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
 
     // Test loading or creating config
     let config = config_manager.load_or_create_config().unwrap();
@@ -58,9 +54,7 @@ fn test_integration_config_workflow() {
 #[test]
 fn test_integration_multiple_paths() {
     let temp_dir = TempDir::new().unwrap();
-    unsafe { env::set_var("XDG_CONFIG_HOME", temp_dir.path()) };
-
-    let config_manager = ConfigManager::new().unwrap();
+    let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
     let mut config = config_manager.load_or_create_config().unwrap();
 
     // Add multiple paths

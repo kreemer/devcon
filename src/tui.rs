@@ -31,8 +31,8 @@ use crate::config::AppConfig;
 
 pub struct TuiApp {
     list_state: ListState,
-    should_quit: bool,
-    selected: bool,
+    pub should_quit: bool,
+    pub selected: bool,
 }
 
 impl TuiApp {
@@ -195,6 +195,7 @@ mod tests {
             dotfiles_repo: None,
             additional_features: std::collections::HashMap::new(),
             env: vec![],
+            socket_path: std::path::PathBuf::new(),
         };
 
         let result = app.run(&empty_config);
