@@ -31,6 +31,7 @@ pub struct AppConfig {
     pub dotfiles_repo: Option<String>,
     pub additional_features: std::collections::HashMap<String, String>,
     pub env: Vec<AppConfigEnv>,
+    pub socket_path: PathBuf,
 }
 
 impl AppConfig {
@@ -64,7 +65,7 @@ impl FromStr for DevContainerContext {
     type Err = ();
 
     fn from_str(input: &str) -> Result<DevContainerContext, Self::Err> {
-        match input {
+        match input.to_lowercase().trim() {
             "all" => Ok(DevContainerContext::All),
             "up" => Ok(DevContainerContext::Up),
             "exec" => Ok(DevContainerContext::Exec),
@@ -78,14 +79,7 @@ pub struct ConfigManager {
 }
 
 impl ConfigManager {
-    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let xdg_dirs = xdg::BaseDirectories::with_prefix("devcon");
-        let config_path = xdg_dirs.find_config_file("config.yaml").unwrap_or_else(|| {
-            xdg_dirs
-                .place_config_file("config.yaml")
-                .expect("Cannot create config directory")
-        });
-
+    pub fn new(config_path: PathBuf) -> Result<Self, Box<dyn std::error::Error>> {
         Ok(ConfigManager { config_path })
     }
 
@@ -169,6 +163,9 @@ impl ConfigManager {
         mut config: AppConfig,
         feature_name: String,
     ) -> Result<AppConfig, Box<dyn std::error::Error>> {
+        if !config.additional_features.contains_key(&feature_name) {
+            return Err(format!("Feature '{}' not found", feature_name).into());
+        }
         config.additional_features.remove(&feature_name);
         self.save_config(&config)?;
         Ok(config)
@@ -224,33 +221,36 @@ impl ConfigManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
     use tempfile::TempDir;
+
+    #[test]
+    fn test_overwriting_config_dir() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
+        assert!(!config_manager.config_path.exists());
+        let _ = config_manager
+            .load_or_create_config()
+            .expect("Failed to create config");
+        assert!(config_manager.config_path.exists());
+    }
 
     #[test]
     fn test_config_creation() {
         let temp_dir = TempDir::new().unwrap();
-        unsafe {
-            env::set_var("XDG_CONFIG_HOME", temp_dir.path());
-        }
-
-        let config_manager = ConfigManager::new().unwrap();
+        let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
         let config = config_manager.load_or_create_config().unwrap();
 
         assert!(config.recent_paths.is_empty());
+        temp_dir.close().unwrap();
     }
 
     #[test]
     fn test_add_recent_path() {
         let temp_dir = TempDir::new().unwrap();
-        unsafe {
-            env::set_var("XDG_CONFIG_HOME", temp_dir.path());
-        }
-
-        let config_manager = ConfigManager::new().unwrap();
+        let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
         let config = config_manager.load_or_create_config().unwrap();
 
-        let test_path = temp_dir.path().to_path_buf();
+        let test_path = &temp_dir.path().to_path_buf();
         let updated_config = config_manager
             .add_recent_path(config, test_path.clone())
             .unwrap();
@@ -265,14 +265,10 @@ mod tests {
     #[test]
     fn test_duplicate_path_handling() {
         let temp_dir = TempDir::new().unwrap();
-        unsafe {
-            env::set_var("XDG_CONFIG_HOME", temp_dir.path());
-        }
-
-        let config_manager = ConfigManager::new().unwrap();
+        let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
         let config = config_manager.load_or_create_config().unwrap();
 
-        let test_path = temp_dir.path().to_path_buf();
+        let test_path = &temp_dir.path().to_path_buf();
         let config = config_manager
             .add_recent_path(config, test_path.clone())
             .unwrap();
@@ -286,11 +282,7 @@ mod tests {
     #[test]
     fn test_dotfiles_configuration() {
         let temp_dir = TempDir::new().unwrap();
-        unsafe {
-            env::set_var("XDG_CONFIG_HOME", temp_dir.path());
-        }
-
-        let config_manager = ConfigManager::new().unwrap();
+        let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
         let config = config_manager.load_or_create_config().unwrap();
 
         let dotfiles_repo = "https://github.com/user/dotfiles".to_string();
@@ -304,11 +296,7 @@ mod tests {
     #[test]
     fn test_features_configuration() {
         let temp_dir = TempDir::new().unwrap();
-        unsafe {
-            env::set_var("XDG_CONFIG_HOME", temp_dir.path());
-        }
-
-        let config_manager = ConfigManager::new().unwrap();
+        let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
         let config = config_manager.load_or_create_config().unwrap();
 
         let feature = "ghcr.io/devcontainers/features/github-cli:1".to_string();
@@ -329,11 +317,7 @@ mod tests {
     #[test]
     fn test_env_configuration() {
         let temp_dir = TempDir::new().unwrap();
-        unsafe {
-            env::set_var("XDG_CONFIG_HOME", temp_dir.path());
-        }
-
-        let config_manager = ConfigManager::new().unwrap();
+        let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
         let config = config_manager.load_or_create_config().unwrap();
 
         let env = "CODESPACES".to_string();
@@ -440,5 +424,140 @@ mod tests {
         assert!(all_env.iter().any(|env| env.name == "ANOTHER_GLOBAL"));
         assert!(!all_env.iter().any(|env| env.name == "UP_VAR"));
         assert!(!all_env.iter().any(|env| env.name == "EXEC_VAR"));
+    }
+
+    #[test]
+    fn test_devcontainer_context_from_string() {
+        assert_eq!(
+            "all".parse::<DevContainerContext>().unwrap(),
+            DevContainerContext::All
+        );
+        assert_eq!(
+            "up".parse::<DevContainerContext>().unwrap(),
+            DevContainerContext::Up
+        );
+        assert_eq!(
+            "exec".parse::<DevContainerContext>().unwrap(),
+            DevContainerContext::Exec
+        );
+
+        assert!("invalid".parse::<DevContainerContext>().is_err());
+    }
+
+    #[test]
+    fn test_devcontainer_context_default() {
+        let default_context = DevContainerContext::default();
+        assert_eq!(default_context, DevContainerContext::All);
+    }
+
+    #[test]
+    fn test_list_env_by_context_edge_cases() {
+        let mut config = AppConfig::default();
+
+        // Test with empty env list
+        let empty_env = config.list_env_by_context(DevContainerContext::Up);
+        assert!(empty_env.is_empty());
+
+        // Add multiple env vars with same context
+        config.env.push(AppConfigEnv {
+            name: "VAR1".to_string(),
+            value: "value1".to_string(),
+            context: DevContainerContext::Up,
+        });
+
+        config.env.push(AppConfigEnv {
+            name: "VAR2".to_string(),
+            value: "value2".to_string(),
+            context: DevContainerContext::Up,
+        });
+
+        let up_env = config.list_env_by_context(DevContainerContext::Up);
+        assert_eq!(up_env.len(), 2);
+
+        // Test that All context items appear in all queries
+        config.env.push(AppConfigEnv {
+            name: "GLOBAL_VAR".to_string(),
+            value: "global_value".to_string(),
+            context: DevContainerContext::All,
+        });
+
+        let up_env_with_global = config.list_env_by_context(DevContainerContext::Up);
+        assert_eq!(up_env_with_global.len(), 3);
+
+        let exec_env = config.list_env_by_context(DevContainerContext::Exec);
+        assert_eq!(exec_env.len(), 1); // Only the global one
+
+        let all_env = config.list_env_by_context(DevContainerContext::All);
+        assert_eq!(all_env.len(), 1); // Only items specifically marked as All
+    }
+
+    #[test]
+    fn test_env_configuration_edge_cases() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
+        let config = config_manager.load_or_create_config().unwrap();
+
+        // Test adding env with None context (should default to All)
+        let updated_config = config_manager
+            .add_env(
+                config,
+                "TEST_VAR".to_string(),
+                "test_value".to_string(),
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(updated_config.env.len(), 1);
+        assert_eq!(updated_config.env[0].context, DevContainerContext::All);
+
+        // Test removing env with invalid index
+        let result = config_manager.remove_env(updated_config.clone(), 999);
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Index out of bounds")
+        );
+
+        // Test removing env with valid index
+        let removed_config = config_manager.remove_env(updated_config, 0).unwrap();
+        assert!(removed_config.env.is_empty());
+    }
+
+    #[test]
+    fn test_config_serialization_with_env() {
+        let temp_dir = TempDir::new().unwrap();
+        let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
+        let mut config = AppConfig::default();
+
+        // Add environment variables
+        config.env.push(AppConfigEnv {
+            name: "EDITOR".to_string(),
+            value: "vim".to_string(),
+            context: DevContainerContext::All,
+        });
+
+        config.env.push(AppConfigEnv {
+            name: "DEBUG".to_string(),
+            value: "true".to_string(),
+            context: DevContainerContext::Exec,
+        });
+
+        // Save and reload
+        config_manager.save_config(&config).unwrap();
+        if let Ok(reloaded_config) = config_manager.load_config() {
+            assert_eq!(reloaded_config.env.len(), 2);
+            assert_eq!(reloaded_config.env[0].name, "EDITOR");
+            assert_eq!(reloaded_config.env[0].context, DevContainerContext::All);
+            assert_eq!(reloaded_config.env[1].name, "DEBUG");
+            assert_eq!(reloaded_config.env[1].context, DevContainerContext::Exec);
+            assert_eq!(reloaded_config.recent_paths.len(), 0);
+        } else {
+            panic!(
+                "Failed to reload config from \"{}\"",
+                &temp_dir.path().display()
+            );
+        }
     }
 }
