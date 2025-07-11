@@ -28,11 +28,11 @@ use std::{path::PathBuf, process::Stdio};
 use crate::config::{AppConfig, DevContainerContext};
 
 fn get_socket_path(config: &AppConfig) -> PathBuf {
-    return config.socket_path.clone().join("devcon.sock");
+    config.socket_path.clone().join("devcon.sock")
 }
 
 fn get_helper_script_path(config: &AppConfig) -> PathBuf {
-    return config.socket_path.clone().join("devcon-browser");
+    config.socket_path.clone().join("devcon-browser")
 }
 
 fn ensure_helper_script_exists(config: &AppConfig) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -202,7 +202,7 @@ pub fn shell_devcontainer(
     }
 
     for env in env_list {
-        cmd.arg("--remote-env").arg(format!("{}", env)); // Assuming env is in "NAME=VALUE" format
+        cmd.arg("--remote-env").arg(env); // Assuming env is in "NAME=VALUE" format
     }
 
     cmd.arg("zsh");

@@ -28,8 +28,7 @@ use tempfile::TempDir;
 #[test]
 fn test_tui_app_creation() {
     // Test TuiApp can be created
-    let app = TuiApp::new();
-    drop(app); // Ensure no panic
+    let _app = TuiApp::new();
 }
 
 #[test]
@@ -52,8 +51,7 @@ fn test_config_functionality() {
     );
 
     // Test that TUI can be created with config
-    let app = TuiApp::new();
-    drop(app);
+    let _app = TuiApp::new();
 }
 
 #[test]

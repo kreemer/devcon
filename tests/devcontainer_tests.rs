@@ -141,8 +141,10 @@ fn test_devcontainer_command_construction() {
     .unwrap();
 
     // Test basic command construction
-    let mut config = AppConfig::default();
-    config.dotfiles_repo = Some("https://github.com/user/dotfiles".to_string());
+    let mut config = AppConfig {
+        dotfiles_repo: Some("https://github.com/user/dotfiles".to_string()),
+        ..Default::default()
+    };
 
     // Add features
     config.additional_features.insert(

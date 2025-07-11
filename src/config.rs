@@ -164,7 +164,7 @@ impl ConfigManager {
         feature_name: String,
     ) -> Result<AppConfig, Box<dyn std::error::Error>> {
         if !config.additional_features.contains_key(&feature_name) {
-            return Err(format!("Feature '{}' not found", feature_name).into());
+            return Err(format!("Feature '{feature_name}' not found").into());
         }
         config.additional_features.remove(&feature_name);
         self.save_config(&config)?;
