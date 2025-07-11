@@ -25,6 +25,11 @@ use std::{path::PathBuf, process::Stdio};
 
 use crate::config::{AppConfig, DevContainerContext};
 
+fn get_socket_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".to_string());
+    PathBuf::from(home).join(".devcon").join("browser.sock")
+}
+
 pub fn up_devcontainer(
     path: &PathBuf,
     config: &AppConfig,
@@ -44,6 +49,15 @@ pub fn up_devcontainer(
     // Build devcontainer command
     let mut cmd = Command::new("devcontainer");
     cmd.arg("up").arg("--workspace-folder").arg(path);
+
+    // Check if socket exists and mount it if it does
+    let socket_path = get_socket_path();
+    if socket_path.exists() {
+        cmd.arg("--mount").arg(format!(
+            "type=bind,source={},target=/tmp/devcon-browser.sock",
+            socket_path.display()
+        ));
+    }
 
     // Add dotfiles repository if configured
     if let Some(ref dotfiles_repo) = config.dotfiles_repo {
@@ -102,6 +116,15 @@ pub fn shell_devcontainer(
         .stdout(Stdio::inherit())
         .stderr(Stdio::inherit());
     cmd.arg("exec").arg("--workspace-folder").arg(path);
+
+    // Check if socket exists and mount it if it does
+    let socket_path = get_socket_path();
+    if socket_path.exists() {
+        cmd.arg("--mount").arg(format!(
+            "type=bind,source={},target=/tmp/devcon-browser.sock",
+            socket_path.display()
+        ));
+    }
 
     // Add variables to build and up context
     for env in config.list_env_by_context(DevContainerContext::Exec) {
