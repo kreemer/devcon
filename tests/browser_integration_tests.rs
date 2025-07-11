@@ -46,10 +46,7 @@ fn test_browser_integration_workflow() {
         .join("devcon");
 
     if !devcon_binary.exists() {
-        println!(
-            "Skipping integration test - devcon binary not found at {:?}",
-            devcon_binary
-        );
+        println!("Skipping integration test - devcon binary not found at {devcon_binary:?}",);
         return;
     }
 
@@ -127,8 +124,7 @@ fn test_helper_script_creation() {
     let helper_script_path = temp_dir.path().join("devcon-browser");
     assert!(
         helper_script_path.exists(),
-        "Helper script should be created at {:?}",
-        helper_script_path
+        "Helper script should be created at {helper_script_path:?}",
     );
 
     // Check script content

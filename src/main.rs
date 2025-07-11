@@ -221,7 +221,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             handle_open_command(&config_manager, path.as_ref())?;
         }
         Some(Commands::Shell { path, env }) => {
-            handle_shell_command(&config_manager, path.as_ref(), env.as_ref())?;
+            handle_shell_command(&config_manager, path.as_ref(), env)?;
         }
         Some(Commands::Check) => {
             handle_check_command()?;
@@ -660,18 +660,6 @@ mod tests {
         let custom_path = temp_dir.path().join("custom.sock");
         let result = handle_socket_command(Some(&custom_path), false, true, &config_manager);
         assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_handle_client_empty_url() {
-        // Test the client handler with empty URL
-        // Note: This is more of an integration test and might be tricky to test
-        // without actual Unix sockets, but we can test the logic
-
-        // This test would require setting up actual Unix sockets,
-        // which is complex for unit tests. We'll rely on integration tests
-        // or manual testing for this functionality.
-        assert!(true); // Placeholder to show test structure
     }
 
     #[test]

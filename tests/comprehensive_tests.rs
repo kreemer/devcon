@@ -215,8 +215,7 @@ fn test_comprehensive_env_var_workflow() {
 
         assert!(
             output.status.success(),
-            "Failed to add env var for context {}",
-            context
+            "Failed to add env var for context {context}",
         );
     }
 
@@ -331,11 +330,7 @@ fn test_features_with_complex_json() {
             .output()
             .expect("Failed to execute devcon config features add");
 
-        assert!(
-            output.status.success(),
-            "Failed to add feature: {}",
-            feature
-        );
+        assert!(output.status.success(), "Failed to add feature: {feature}");
     }
 
     // Test listing features
