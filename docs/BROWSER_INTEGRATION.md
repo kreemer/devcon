@@ -1,13 +1,16 @@
 # DevCon Browser Integration
 
-This feature allows you to open URLs in the host's default browser from within a devcontainer.
+This feature allows you to open URLs in the host's default browser from within a devcontainer with seamless integration.
 
 ## How it works
 
-1. **Socket Server**: DevCon can run a socket server on the host that listens for URL requests
-2. **Socket Mount**: When starting a devcontainer, the socket is automatically mounted inside the container
-3. **Browser Helper**: A helper script inside the container can send URLs to the socket server
-4. **URL Opening**: The socket server receives the URL and opens it in the host's default browser
+1. **Socket Server**: DevCon runs a socket server on the host that listens for URL requests
+2. **Automatic Setup**: When starting a devcontainer, DevCon automatically:
+   - Mounts the socket inside the container
+   - Creates and mounts a helper script at `/usr/local/bin/devcon-browser`
+   - Sets the `BROWSER` environment variable in exec shells
+3. **URL Opening**: Applications inside the container can send URLs to the socket server
+4. **Host Integration**: The socket server receives URLs and opens them in the host's default browser
 
 ## Usage
 
@@ -36,16 +39,21 @@ devcon open /path/to/your/project
 
 ### 3. Open URLs from inside the container
 
-Inside the devcontainer, you can use the provided helper script:
+The helper script is automatically available inside the container:
 
 ```bash
-# Copy the helper script to the container (if not already there)
-cp /workspaces/devcon/scripts/devcon-browser.sh /usr/local/bin/devcon-browser
-chmod +x /usr/local/bin/devcon-browser
-
-# Open a URL
+# Direct usage
 devcon-browser https://github.com
 devcon-browser https://localhost:3000
+
+# Using the BROWSER environment variable (available in exec shells)
+devcon shell /path/to/your/project
+# Inside the container:
+$BROWSER https://github.com
+
+# Or with environment expansion
+export URL="https://github.com"
+$BROWSER "$URL"
 ```
 
 Alternatively, you can send URLs directly to the socket:
@@ -53,6 +61,14 @@ Alternatively, you can send URLs directly to the socket:
 ```bash
 echo "https://github.com" | nc -U /tmp/devcon-browser.sock
 ```
+
+## Automatic Integration
+
+When you start a devcontainer with an active socket server, DevCon automatically:
+
+- **Mounts the socket**: Host socket → `/tmp/devcon-browser.sock` in container
+- **Mounts helper script**: Auto-generated script → `/usr/local/bin/devcon-browser` in container
+- **Sets BROWSER env**: In exec shells, `BROWSER=devcon-browser` is automatically set
 
 ## Socket Location
 
@@ -92,15 +108,20 @@ echo "https://github.com" | nc -U /tmp/devcon-browser.sock
 # Start socket server in daemon mode
 devcon socket --daemon
 
-# Start devcontainer (socket will be mounted automatically)
+# Start devcontainer (socket and helper automatically mounted)
 devcon open ~/my-project
 
-# Inside container - open development server
+# Inside container - helper script is ready to use
 devcon-browser http://localhost:3000
 
 # Inside container - open documentation
 devcon-browser https://docs.example.com
 
-# Inside container - open GitHub repository
-devcon-browser https://github.com/user/repo
+# Using exec shell with BROWSER environment variable
+devcon shell ~/my-project
+# Inside shell:
+$BROWSER https://github.com/user/repo
+
+# Check socket location on host
+devcon socket --show-path
 ```
