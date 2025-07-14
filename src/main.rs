@@ -25,12 +25,14 @@ mod devcontainer;
 mod tui;
 
 use clap::{Parser, Subcommand};
+use indicatif::ProgressBar;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::process::Command;
 use std::thread;
+use std::time::Duration;
 
 use config::ConfigManager;
 use devcontainer::{check_devcontainer_cli, shell_devcontainer, up_devcontainer};
@@ -218,7 +220,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match &cli.command {
         Some(Commands::Open { path }) => {
+            let bar = ProgressBar::new_spinner();
+            bar.enable_steady_tick(Duration::from_millis(100));
             handle_open_command(&config_manager, path.as_ref())?;
+            bar.finish();
         }
         Some(Commands::Shell { path, env }) => {
             handle_shell_command(&config_manager, path.as_ref(), env)?;
