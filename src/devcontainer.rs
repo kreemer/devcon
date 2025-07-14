@@ -110,7 +110,6 @@ pub fn up_devcontainer(
 
     // Check if socket exists and mount it if it does
     let socket_path = get_socket_path(config);
-    println!("[DEBUG] Socket path: {}", socket_path.display());
     if socket_path.exists() {
         cmd.arg("--mount").arg(format!(
             "type=bind,source={},target=/tmp/devcon-browser.sock",
