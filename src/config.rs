@@ -31,7 +31,6 @@ pub struct AppConfig {
     pub dotfiles_repo: Option<String>,
     pub additional_features: std::collections::HashMap<String, String>,
     pub env: Vec<AppConfigEnv>,
-    pub socket_path: PathBuf,
 }
 
 impl AppConfig {
