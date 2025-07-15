@@ -23,6 +23,7 @@ ratatui-widgets = "0.2.2"
 serde = "1.0.219"
 serde_yaml = "0.9.34"
 xdg = "3.0.0"
+minijinja = "2.11.0"
 
 [dev-dependencies]
 tempfile = "3.8"

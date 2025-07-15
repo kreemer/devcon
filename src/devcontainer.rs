@@ -20,10 +20,33 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+use minijinja::{Environment, Error, render};
 use std::process::Command;
 use std::{path::PathBuf, process::Stdio};
 
 use crate::config::{AppConfig, DevContainerContext};
+
+fn exec_minijinja(command: String, arguments: Vec<String>) -> Result<String, Error> {
+    let mut cmd = Command::new(command);
+    for argument in arguments {
+        cmd.arg(argument.clone());
+    }
+
+    let output = cmd.output().map_err(|e| {
+        Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            "Could not execute command",
+        )
+        .with_source(e)
+    })?;
+
+    if !output.clone().status.success() {
+        return Err(Error::new(minijinja::ErrorKind::InvalidOperation, "Error"));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+
+    Ok(stdout.to_string().trim().to_string())
+}
 
 pub fn up_devcontainer(
     path: &PathBuf,
@@ -40,6 +63,9 @@ pub fn up_devcontainer(
         )
         .into());
     }
+
+    let mut environment = Environment::new();
+    environment.add_function("exec", exec_minijinja);
 
     // Build devcontainer command
     let mut cmd = Command::new("devcontainer");
@@ -64,8 +90,11 @@ pub fn up_devcontainer(
 
     // Add variables to build and up context
     for env in config.list_env_by_context(DevContainerContext::Up) {
-        cmd.arg("--remote-env")
-            .arg(format!("{}={}", env.name, env.value));
+        cmd.arg("--remote-env").arg(format!(
+            "{}={}",
+            env.name,
+            render!(in environment, &env.value)
+        ));
     }
 
     let output = cmd.output()?;
@@ -97,6 +126,9 @@ pub fn shell_devcontainer(
         .into());
     }
 
+    let mut environment = Environment::new();
+    environment.add_function("exec", exec_minijinja);
+
     // Build devcontainer command
     let mut cmd = Command::new("devcontainer");
     cmd.stdin(Stdio::inherit())
@@ -106,8 +138,11 @@ pub fn shell_devcontainer(
 
     // Add variables to build and up context
     for env in config.list_env_by_context(DevContainerContext::Exec) {
-        cmd.arg("--remote-env")
-            .arg(format!("{}={}", env.name, env.value));
+        cmd.arg("--remote-env").arg(format!(
+            "{}={}",
+            env.name,
+            render!(in environment, &env.value)
+        ));
     }
 
     for env in env_list {
