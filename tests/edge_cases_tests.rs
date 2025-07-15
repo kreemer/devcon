@@ -29,10 +29,7 @@ use tempfile::TempDir;
 fn test_command_error_handling() {
     let temp_dir = TempDir::new().unwrap();
     let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
-    let config = AppConfig {
-        socket_path: temp_dir.path().to_path_buf(),
-        ..Default::default()
-    };
+    let config = AppConfig::default();
     config_manager.save_config(&config).unwrap();
 
     let devcon_binary = env::current_dir()
@@ -114,10 +111,7 @@ fn test_command_error_handling() {
 fn test_comprehensive_config_workflow() {
     let temp_dir = TempDir::new().unwrap();
     let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
-    let config = AppConfig {
-        socket_path: temp_dir.path().to_path_buf(),
-        ..Default::default()
-    };
+    let config = AppConfig::default();
     config_manager.save_config(&config).unwrap();
 
     let devcon_binary = env::current_dir()
@@ -322,10 +316,7 @@ fn test_comprehensive_config_workflow() {
 fn test_help_and_version_commands() {
     let temp_dir = TempDir::new().unwrap();
     let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
-    let config = AppConfig {
-        socket_path: temp_dir.path().to_path_buf(),
-        ..Default::default()
-    };
+    let config = AppConfig::default();
     config_manager.save_config(&config).unwrap();
 
     let devcon_binary = env::current_dir()
@@ -384,10 +375,7 @@ fn test_help_and_version_commands() {
 fn test_check_command() {
     let temp_dir = TempDir::new().unwrap();
     let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
-    let config = AppConfig {
-        socket_path: temp_dir.path().to_path_buf(),
-        ..Default::default()
-    };
+    let config = AppConfig::default();
     config_manager.save_config(&config).unwrap();
 
     let devcon_binary = env::current_dir()

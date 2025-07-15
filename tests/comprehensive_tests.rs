@@ -148,7 +148,6 @@ fn test_config_file_operations() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = temp_dir.path().join("config.yaml");
     let config = AppConfig {
-        socket_path: temp_dir.path().to_path_buf(),
         recent_paths: vec![PathBuf::from("/test/path")],
         dotfiles_repo: Some("https://github.com/test/dotfiles".to_string()),
         ..Default::default()
@@ -174,10 +173,7 @@ fn test_config_file_operations() {
 fn test_comprehensive_env_var_workflow() {
     let temp_dir = TempDir::new().unwrap();
     let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
-    let config = AppConfig {
-        socket_path: temp_dir.path().to_path_buf(),
-        ..Default::default()
-    };
+    let config = AppConfig::default();
     config_manager.save_config(&config).unwrap();
 
     let devcon_binary = env::current_dir()
@@ -283,10 +279,7 @@ fn test_comprehensive_env_var_workflow() {
 fn test_features_with_complex_json() {
     let temp_dir = TempDir::new().unwrap();
     let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
-    let config = AppConfig {
-        socket_path: temp_dir.path().to_path_buf(),
-        ..Default::default()
-    };
+    let config = AppConfig::default();
     config_manager.save_config(&config).unwrap();
 
     let devcon_binary = env::current_dir()
@@ -363,10 +356,7 @@ fn test_features_with_complex_json() {
 fn test_config_persistence() {
     let temp_dir = TempDir::new().unwrap();
     let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
-    let config = AppConfig {
-        socket_path: temp_dir.path().to_path_buf(),
-        ..Default::default()
-    };
+    let config = AppConfig::default();
     config_manager.save_config(&config).unwrap();
 
     let devcon_binary = env::current_dir()
@@ -471,10 +461,7 @@ fn test_config_persistence() {
 fn test_error_handling_edge_cases() {
     let temp_dir = TempDir::new().unwrap();
     let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
-    let config = AppConfig {
-        socket_path: temp_dir.path().to_path_buf(),
-        ..Default::default()
-    };
+    let config = AppConfig::default();
     config_manager.save_config(&config).unwrap();
 
     let devcon_binary = env::current_dir()
