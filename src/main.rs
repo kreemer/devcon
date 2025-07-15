@@ -26,12 +26,7 @@ mod tui;
 
 use clap::{Parser, Subcommand};
 use indicatif::ProgressBar;
-use std::fs;
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
-use std::process::Command;
-use std::thread;
 use std::time::Duration;
 
 use config::ConfigManager;
@@ -90,24 +85,6 @@ enum Commands {
     /// Check if the required tools are available
     #[command(about = "Check if DevContainer CLI is properly installed and available")]
     Check,
-    /// Start a socket server for browser integration
-    #[command(
-        about = "Start a socket server that allows containers to open URLs in the host browser"
-    )]
-    Socket {
-        /// Socket path (optional, defaults to XDG runtime directory)
-        #[arg(
-            help = "Path to the socket file. If not provided, uses XDG runtime directory",
-            value_name = "SOCKET_PATH"
-        )]
-        socket_path: Option<PathBuf>,
-        /// Run in daemon mode (background)
-        #[arg(short, long, help = "Run the socket server in daemon mode")]
-        daemon: bool,
-        /// Show the default socket path and exit
-        #[arg(long, help = "Show the default socket path and exit")]
-        show_path: bool,
-    },
     /// Manage configuration settings
     #[command(subcommand, about = "Manage configuration settings for DevCon")]
     Config(ConfigCommands),
@@ -230,13 +207,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Commands::Check) => {
             handle_check_command()?;
-        }
-        Some(Commands::Socket {
-            socket_path,
-            daemon,
-            show_path,
-        }) => {
-            handle_socket_command(socket_path.as_ref(), *daemon, *show_path, &config_manager)?;
         }
         Some(Commands::Config(config_cmd)) => {
             handle_config_command(&config_manager, config_cmd)?;
@@ -468,215 +438,4 @@ fn handle_envs_command(
         }
     }
     Ok(())
-}
-
-fn handle_socket_command(
-    socket_path: Option<&PathBuf>,
-    daemon: bool,
-    show_path: bool,
-    config_manager: &ConfigManager,
-) -> Result<(), Box<dyn std::error::Error>> {
-    let socket_path = socket_path.map(|p| p.to_path_buf()).unwrap_or_else(|| {
-        config_manager
-            .load_or_create_config()
-            .map(|config| config.socket_path.join("devcon.sock"))
-            .expect("Socket path is not provided nor configured")
-    });
-
-    if !socket_path.parent().unwrap().exists() {
-        return Err(format!(
-            "The specified socket path '{}' does not exist.",
-            socket_path.display()
-        )
-        .into());
-    }
-
-    // If show_path is true, just print the path and exit
-    if show_path {
-        println!("{}", socket_path.display());
-        return Ok(());
-    }
-
-    // Ensure parent directory exists
-    if let Some(parent) = socket_path.parent() {
-        fs::create_dir_all(parent)?;
-    }
-
-    // Remove existing socket if it exists
-    if socket_path.exists() {
-        fs::remove_file(&socket_path)?;
-    }
-
-    if daemon {
-        println!(
-            "Starting socket server in daemon mode at: {}",
-            socket_path.display()
-        );
-        // For daemon mode, we could use a proper daemon library, but for now we'll just fork
-        match unsafe { libc::fork() } {
-            -1 => return Err("Failed to fork process".into()),
-            0 => {
-                // Child process
-                start_socket_server(&socket_path)?;
-            }
-            _pid => {
-                // Parent process
-                println!("✅ Socket server started in background");
-                return Ok(());
-            }
-        }
-    } else {
-        println!("Starting socket server at: {}", socket_path.display());
-        println!("Press Ctrl+C to stop the server");
-        start_socket_server(&socket_path)?;
-    }
-
-    Ok(())
-}
-
-fn start_socket_server(socket_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let listener = UnixListener::bind(socket_path)?;
-
-    // Set socket permissions to be readable/writable by owner and group
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(socket_path)?.permissions();
-        perms.set_mode(0o660);
-        fs::set_permissions(socket_path, perms)?;
-    }
-
-    println!("Socket server listening on: {}", socket_path.display());
-
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                thread::spawn(move || {
-                    if let Err(e) = handle_client(stream) {
-                        eprintln!("Error handling client: {e}");
-                    }
-                });
-            }
-            Err(e) => {
-                eprintln!("Error accepting connection: {e}");
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn handle_client(mut stream: UnixStream) -> Result<(), Box<dyn std::error::Error>> {
-    let mut reader = BufReader::new(&stream);
-    let mut line = String::new();
-
-    reader.read_line(&mut line)?;
-    let url = line.trim();
-
-    if url.is_empty() {
-        return Err("Empty URL received".into());
-    }
-
-    println!("Received request to open URL: {url}");
-
-    // Try to open the URL using the system's default browser
-    let result = if cfg!(target_os = "macos") {
-        Command::new("open").arg(url).output()
-    } else if cfg!(target_os = "windows") {
-        Command::new("cmd").args(["/c", "start", url]).output()
-    } else {
-        // Linux and other Unix-like systems
-        // Try xdg-open first, then fallback to other options
-        Command::new("xdg-open")
-            .arg(url)
-            .output()
-            .or_else(|_| Command::new("firefox").arg(url).output())
-            .or_else(|_| Command::new("google-chrome").arg(url).output())
-            .or_else(|_| Command::new("chromium").arg(url).output())
-    };
-
-    match result {
-        Ok(output) => {
-            if output.status.success() {
-                println!("✅ Successfully opened URL: {url}");
-                stream.write_all(b"SUCCESS\n")?;
-            } else {
-                let error_msg = String::from_utf8_lossy(&output.stderr);
-                eprintln!("❌ Failed to open URL: {error_msg}");
-                stream.write_all(b"ERROR\n")?;
-            }
-        }
-        Err(e) => {
-            eprintln!("❌ Failed to execute browser command: {e}");
-            stream.write_all(b"ERROR\n")?;
-        }
-    }
-
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use tempfile::TempDir;
-
-    #[test]
-    fn test_socket_path_generation() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
-
-        // Test show_path functionality
-        let result = handle_socket_command(None, false, true, &config_manager);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_socket_command_with_custom_path() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
-        let custom_socket_path = temp_dir.path().join("custom.sock");
-
-        // Test with custom path and show_path
-        let result = handle_socket_command(Some(&custom_socket_path), false, true, &config_manager);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_socket_server_path_creation() {
-        let temp_dir = TempDir::new().unwrap();
-        let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
-
-        let mut config = config_manager
-            .load_or_create_config()
-            .expect("Failed to load or create config");
-        config.socket_path = temp_dir.path().to_path_buf();
-
-        config_manager
-            .save_config(&config)
-            .expect("Failed to save config");
-
-        // Test the --show-path functionality only (doesn't start server)
-        let result = handle_socket_command(None, false, true, &config_manager);
-
-        // The function should succeed when just showing path
-        assert!(result.is_ok());
-
-        // Test with custom socket path
-        let custom_path = temp_dir.path().join("custom.sock");
-        let result = handle_socket_command(Some(&custom_path), false, true, &config_manager);
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_browser_command_generation() {
-        // Test different OS browser command generation logic
-        // This tests the platform-specific browser opening logic
-
-        let url = "https://example.com";
-
-        // We can't easily test the actual command execution without
-        // affecting the test environment, but we can test the logic structure
-        assert!(!url.is_empty());
-        assert!(url.starts_with("http"));
-    }
 }
