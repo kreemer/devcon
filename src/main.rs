@@ -38,7 +38,7 @@ use tui::TuiApp;
     name = "devcon",
     about = "A TUI application for managing and launching development containers",
     long_about = "DevCon helps you manage your development containers by keeping track of recent projects and providing a convenient interface to them with devcontainer-cli.",
-    version = "0.1.2"
+    version = "0.1.3"
 )]
 struct Cli {
     /// Set config file path
