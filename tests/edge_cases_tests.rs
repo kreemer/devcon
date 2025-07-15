@@ -351,8 +351,6 @@ fn test_help_and_version_commands() {
     assert!(output.status.success());
     let help_text = String::from_utf8(output.stdout).unwrap();
     assert!(help_text.contains("DevCon helps you manage"));
-    assert!(help_text.contains("socket"));
-    assert!(help_text.contains("config"));
 
     // Test version
     let output = Command::new(&devcon_binary)

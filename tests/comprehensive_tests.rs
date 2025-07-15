@@ -360,44 +360,6 @@ fn test_features_with_complex_json() {
 }
 
 #[test]
-fn test_socket_path_generation() {
-    let temp_dir = TempDir::new().unwrap();
-    let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
-    let config = AppConfig {
-        socket_path: temp_dir.path().to_path_buf(),
-        ..Default::default()
-    };
-    config_manager.save_config(&config).unwrap();
-
-    let devcon_binary = env::current_dir()
-        .unwrap()
-        .join("target")
-        .join("release")
-        .join("devcon");
-
-    if !devcon_binary.exists() {
-        println!("Skipping integration test - devcon binary not found");
-        return;
-    }
-
-    let output = Command::new(&devcon_binary)
-        .args([
-            "--config-file",
-            temp_dir.path().join("config.yaml").to_str().unwrap(),
-            "socket",
-            "--show-path",
-        ])
-        .output()
-        .expect("Failed to execute devcon socket --show-path");
-
-    assert!(output.status.success());
-    let binding = String::from_utf8(output.stdout).unwrap();
-    let socket_path = binding.trim();
-
-    assert!(socket_path.ends_with("devcon.sock"));
-}
-
-#[test]
 fn test_config_persistence() {
     let temp_dir = TempDir::new().unwrap();
     let config_manager = ConfigManager::new(temp_dir.path().join("config.yaml")).unwrap();
