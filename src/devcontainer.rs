@@ -27,12 +27,16 @@ use std::{path::PathBuf, process::Stdio};
 
 use crate::config::{AppConfig, DevContainerContext};
 
+fn get_helper_path(config: &AppConfig) -> PathBuf {
+    config.socket_path.clone()
+}
+
 fn get_socket_path(config: &AppConfig) -> PathBuf {
-    config.socket_path.clone().join("devcon.sock")
+    get_helper_path(config).join("devcon.sock")
 }
 
 fn get_helper_script_path(config: &AppConfig) -> PathBuf {
-    config.socket_path.clone().join("devcon-browser")
+    get_helper_path(config).join("devcon-browser")
 }
 
 fn ensure_helper_script_exists(config: &AppConfig) -> Result<PathBuf, Box<dyn std::error::Error>> {
@@ -109,7 +113,7 @@ pub fn up_devcontainer(
     cmd.arg("up").arg("--workspace-folder").arg(path);
 
     // Check if socket exists and mount it if it does
-    let socket_path = get_socket_path(config);
+    let socket_path = get_helper_path(config);
     if socket_path.exists() {
         cmd.arg("--mount").arg(format!(
             "type=bind,source={},target=/tmp/devcon-browser.sock",
