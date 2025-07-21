@@ -21,10 +21,70 @@
 // SOFTWARE.
 
 use minijinja::{Environment, Error, render};
+use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::{path::PathBuf, process::Stdio};
 
 use crate::config::{AppConfig, DevContainerContext};
+
+fn ensure_helper_script_exists() -> Result<(), Box<dyn std::error::Error>> {
+    let xdg_dirs = xdg::BaseDirectories::with_prefix("devcon");
+    let socket_directory = xdg_dirs
+        .get_data_home()
+        .expect("Failed to create XDG base directories");
+
+    let script_path = socket_directory.join("devcon-browser.sh");
+
+    // Create the helper script content
+    let script_content = r#"#!/bin/bash
+# DevCon Browser Helper Script - Auto-generated
+# This script allows opening URLs in the host's default browser from within a devcontainer
+
+SOCKET_PATH="/tmp/devcon-browser.sock"
+
+if [ $# -eq 0 ]; then
+    echo "Usage: $0 <url>"
+    echo "Example: $0 https://github.com"
+    exit 1
+fi
+
+URL="$1"
+
+if [ ! -S "$SOCKET_PATH" ]; then
+    echo "Error: DevCon browser socket not found at $SOCKET_PATH"
+    echo "Make sure the devcon socket server is running on the host:"
+    echo "  devcon socket --daemon"
+    echo "The socket is typically located in your XDG runtime directory on the host."
+    exit 1
+fi
+
+# Send the URL to the socket
+echo "$URL" | nc -U "$SOCKET_PATH" 2>/dev/null || {
+    echo "Error: Failed to send URL to socket. Is netcat (nc) installed?"
+    exit 1
+}
+"#;
+
+    // Write the script if it doesn't exist or is outdated
+    if !script_path.exists()
+        || fs::read_to_string(&script_path).map_or(true, |content| content != script_content)
+    {
+        // Ensure parent directory exists
+        if let Some(parent) = script_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        fs::write(&script_path, script_content)?;
+
+        // Make it executable
+        let mut perms = fs::metadata(&script_path)?.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&script_path, perms)?;
+    }
+
+    Ok(())
+}
 
 fn exec_minijinja(command: String, arguments: Vec<String>) -> Result<String, Error> {
     let mut cmd = Command::new(command);
@@ -97,6 +157,27 @@ pub fn up_devcontainer(
         ));
     }
 
+    let xdg_dirs = xdg::BaseDirectories::with_prefix("devcon");
+    let socket_directory = xdg_dirs
+        .get_data_home()
+        .expect("Failed to create XDG base directories");
+
+    let socket_path = socket_directory.join("devcon.sock");
+    if fs::exists(&socket_path)? {
+        cmd.arg("--mount").arg(format!(
+            "type=bind,source={},target=/var/run/devcon.sock",
+            socket_path.display()
+        ));
+    }
+
+    let socket_script = socket_directory.join("devcon-browser.sh");
+    if fs::exists(&socket_path)? && ensure_helper_script_exists().is_ok() {
+        cmd.arg("--mount").arg(format!(
+            "type=bind,source={},target=/opt/devcon-browser.sh",
+            socket_script.display()
+        ));
+    }
+
     let output = cmd.output()?;
 
     if !output.status.success() {
@@ -147,6 +228,17 @@ pub fn shell_devcontainer(
 
     for env in env_list {
         cmd.arg("--remote-env").arg(env); // Assuming env is in "NAME=VALUE" format
+    }
+
+    let xdg_dirs = xdg::BaseDirectories::with_prefix("devcon");
+    let socket_directory = xdg_dirs
+        .get_data_home()
+        .expect("Failed to create XDG base directories");
+
+    let socket_path = socket_directory.join("devcon.sock");
+    if fs::exists(&socket_path)? {
+        cmd.arg("--remote-env")
+            .arg("BROWSER=/opt/devcon-browser.sh");
     }
 
     cmd.arg("zsh");
