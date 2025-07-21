@@ -20,14 +20,19 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+use std::io::Write;
 mod config;
 mod devcontainer;
 mod tui;
 
 use clap::{Parser, Subcommand};
 use indicatif::ProgressBar;
-use std::path::PathBuf;
+use std::io::{BufRead, BufReader};
+use std::os::unix::net::UnixStream;
+use std::process::Command;
 use std::time::Duration;
+use std::{fs, thread};
+use std::{os::unix::net::UnixListener, path::PathBuf};
 
 use config::ConfigManager;
 use devcontainer::{check_devcontainer_cli, shell_devcontainer, up_devcontainer};
@@ -88,6 +93,13 @@ enum Commands {
     /// Manage configuration settings
     #[command(subcommand, about = "Manage configuration settings for DevCon")]
     Config(ConfigCommands),
+
+    /// Manage configuration settings
+    #[command(about = "Handle the socket server for communication with the host")]
+    Socket {
+        #[arg(short, long, help = "Run the socket server in a daemon")]
+        daemon: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -210,6 +222,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Some(Commands::Config(config_cmd)) => {
             handle_config_command(&config_manager, config_cmd)?;
+        }
+        Some(Commands::Socket { daemon }) => {
+            handle_socket_command(*daemon)?;
         }
         None => {
             handle_tui_mode(&config_manager)?;
@@ -437,5 +452,124 @@ fn handle_envs_command(
             println!("✅ All envs cleared");
         }
     }
+    Ok(())
+}
+
+fn handle_socket_command(daemon: bool) -> Result<(), Box<dyn std::error::Error>> {
+    let xdg_dirs = xdg::BaseDirectories::with_prefix("devcon");
+    let socket_directory = xdg_dirs
+        .get_data_home()
+        .expect("Failed to create XDG base directories");
+
+    fs::create_dir_all(&socket_directory)?;
+    let socket_path = socket_directory.join("devcon.sock");
+
+    let socket_path = PathBuf::from("/var/run/devcon.sock");
+    if fs::exists(&socket_path)? {
+        fs::remove_file(&socket_path)?;
+    }
+    if daemon {
+        println!(
+            "Starting socket server in daemon mode at: {}",
+            socket_path.display()
+        );
+        // For daemon mode, we could use a proper daemon library, but for now we'll just fork
+        match unsafe { libc::fork() } {
+            -1 => return Err("Failed to fork process".into()),
+            0 => {
+                // Child process
+                start_socket_server(&socket_path)?;
+            }
+            _pid => {
+                // Parent process
+                println!("✅ Socket server started in background");
+                return Ok(());
+            }
+        }
+    } else {
+        println!("Starting socket server at: {}", socket_path.display());
+        println!("Press Ctrl+C to stop the server");
+        start_socket_server(&socket_path)?;
+    }
+    Ok(())
+}
+
+fn start_socket_server(socket_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+    let listener = UnixListener::bind(socket_path)?;
+
+    // Set socket permissions to be readable/writable by owner and group
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(socket_path)?.permissions();
+        perms.set_mode(0o660);
+        fs::set_permissions(socket_path, perms)?;
+    }
+
+    for stream in listener.incoming() {
+        match stream {
+            Ok(stream) => {
+                thread::spawn(move || {
+                    if let Err(e) = handle_client(stream) {
+                        eprintln!("Error handling client: {e}");
+                    }
+                });
+            }
+            Err(_) => {
+                eprintln!("Error with new stream");
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn handle_client(mut stream: UnixStream) -> Result<(), Box<dyn std::error::Error>> {
+    let mut reader = BufReader::new(&stream);
+    let mut line = String::new();
+
+    reader.read_line(&mut line)?;
+
+    let url = line.trim();
+
+    if url.is_empty() {
+        return Err("Empty URL received".into());
+    }
+
+    println!("Received request to open URL: {url}");
+
+    // Try to open the URL using the system's default browser
+    let result = if cfg!(target_os = "macos") {
+        Command::new("open").arg(url).output()
+    } else if cfg!(target_os = "windows") {
+        Command::new("cmd").args(["/c", "start", url]).output()
+    } else {
+        // Linux and other Unix-like systems
+        // Try xdg-open first, then fallback to other options
+        Command::new("xdg-open")
+            .arg(url)
+            .output()
+            .or_else(|_| Command::new("firefox").arg(url).output())
+            .or_else(|_| Command::new("google-chrome").arg(url).output())
+            .or_else(|_| Command::new("chromium").arg(url).output())
+    };
+
+    match result {
+        Ok(output) => {
+            if output.status.success() {
+                println!("✅ Successfully opened URL: {url}");
+                stream.write_all(b"SUCCESS\n")?;
+            } else {
+                let error_msg = String::from_utf8_lossy(&output.stderr);
+                eprintln!("❌ Failed to open URL: {error_msg}");
+                stream.write_all(b"ERROR\n")?;
+            }
+        }
+        Err(e) => {
+            eprintln!("❌ Failed to execute browser command: {e}");
+            stream.write_all(b"ERROR\n")?;
+        }
+    }
+
     Ok(())
 }
