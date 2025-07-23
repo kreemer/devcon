@@ -20,13 +20,21 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
+use std::rc::Rc;
 mod config;
 mod devcontainer;
 mod tui;
 
 use clap::{Parser, Subcommand};
 use indicatif::ProgressBar;
+use pidfile::PidFile;
+use simple_server::Response;
+use simple_server::ResponseBuilder;
+use simple_server::StatusCode;
+use simple_server::{Builder, ResponseResult, Server};
+use simple_server::{Method, Request};
 use std::io::{BufRead, BufReader};
 use std::os::unix::net::UnixStream;
 use std::process::Command;
@@ -34,7 +42,7 @@ use std::time::Duration;
 use std::{fs, thread};
 use std::{os::unix::net::UnixListener, path::PathBuf};
 
-use config::ConfigManager;
+use config::{ConfigManager, RuntimeConfig};
 use devcontainer::{check_devcontainer_cli, shell_devcontainer, up_devcontainer};
 use tui::TuiApp;
 
@@ -456,28 +464,22 @@ fn handle_envs_command(
 }
 
 fn handle_socket_command(daemon: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let xdg_dirs = xdg::BaseDirectories::with_prefix("devcon");
-    let socket_directory = xdg_dirs
-        .get_data_home()
+    let pidfile_path = xdg::BaseDirectories::with_prefix("devcon")
+        .get_state_home()
         .expect("Failed to create XDG base directories");
 
-    fs::create_dir_all(&socket_directory)?;
-    let socket_path = socket_directory.join("devcon.sock");
-
-    if fs::exists(&socket_path)? {
-        fs::remove_file(&socket_path)?;
+    if !pidfile_path.exists() {
+        fs::create_dir_all(&pidfile_path)?;
     }
+    let pidfile = PidFile::new(pidfile_path.join("devcon.pid"))?;
     if daemon {
-        println!(
-            "Starting socket server in daemon mode at: {}",
-            socket_path.display()
-        );
+        println!("Starting socket server in daemon mode");
         // For daemon mode, we could use a proper daemon library, but for now we'll just fork
         match unsafe { libc::fork() } {
             -1 => return Err("Failed to fork process".into()),
             0 => {
                 // Child process
-                start_socket_server(&socket_path)?;
+                start_socket_server()?;
             }
             _pid => {
                 // Parent process
@@ -486,89 +488,107 @@ fn handle_socket_command(daemon: bool) -> Result<(), Box<dyn std::error::Error>>
             }
         }
     } else {
-        println!("Starting socket server at: {}", socket_path.display());
+        println!("Starting socket server");
         println!("Press Ctrl+C to stop the server");
-        start_socket_server(&socket_path)?;
+        start_socket_server()?;
     }
+    drop(pidfile);
     Ok(())
 }
 
-fn start_socket_server(socket_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
-    let listener = UnixListener::bind(socket_path)?;
+fn start_socket_server() -> Result<(), Box<dyn std::error::Error>> {
+    let runtime_config_path = xdg::BaseDirectories::with_prefix("devcon")
+        .place_config_file("runtime.yaml")
+        .expect("Failed to create XDG base directories");
+    let listener = TcpListener::bind("127.0.0.1:0")?;
 
-    // Set socket permissions to be readable/writable by owner and group
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mut perms = fs::metadata(socket_path)?.permissions();
-        perms.set_mode(0o660);
-        fs::set_permissions(socket_path, perms)?;
-    }
-
-    for stream in listener.incoming() {
-        match stream {
-            Ok(stream) => {
-                thread::spawn(move || {
-                    if let Err(e) = handle_client(stream) {
-                        eprintln!("Error handling client: {e}");
-                    }
-                });
-            }
-            Err(_) => {
-                eprintln!("Error with new stream");
-                break;
-            }
-        }
-    }
-    Ok(())
-}
-
-fn handle_client(mut stream: UnixStream) -> Result<(), Box<dyn std::error::Error>> {
-    let mut reader = BufReader::new(&stream);
-    let mut line = String::new();
-
-    reader.read_line(&mut line)?;
-
-    let url = line.trim();
-
-    if url.is_empty() {
-        return Err("Empty URL received".into());
-    }
-
-    println!("Received request to open URL: {url}");
-
-    // Try to open the URL using the system's default browser
-    let result = if cfg!(target_os = "macos") {
-        Command::new("open").arg(url).output()
-    } else if cfg!(target_os = "windows") {
-        Command::new("cmd").args(["/c", "start", url]).output()
-    } else {
-        // Linux and other Unix-like systems
-        // Try xdg-open first, then fallback to other options
-        Command::new("xdg-open")
-            .arg(url)
-            .output()
-            .or_else(|_| Command::new("firefox").arg(url).output())
-            .or_else(|_| Command::new("google-chrome").arg(url).output())
-            .or_else(|_| Command::new("chromium").arg(url).output())
+    println!("Socket server started at {}", listener.local_addr()?);
+    let runtime_config = RuntimeConfig {
+        socket_address: Some(listener.local_addr()?.port()),
     };
+    let file = std::fs::OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(runtime_config_path)?;
+    serde_yaml::to_writer(file, &runtime_config).unwrap();
 
-    match result {
-        Ok(output) => {
-            if output.status.success() {
-                println!("✅ Successfully opened URL: {url}");
-                stream.write_all(b"SUCCESS\n")?;
+    let server = Server::new(handle_client);
+
+    server.listen_on_socket(listener);
+}
+
+fn handle_client(
+    request: Request<Vec<u8>>,
+    mut response_builder: ResponseBuilder,
+) -> ResponseResult {
+    if request.method() != Method::POST {
+        return response_builder
+            .status(StatusCode::BAD_REQUEST)
+            .body("Only POST methods are implemented".to_string().into_bytes())
+            .map_err(|e| e.into());
+    }
+    match request.uri().path() {
+        "/open" => {
+            let url = str::from_utf8(request.body().as_slice()).unwrap_or_default();
+
+            if url.is_empty() {
+                return response_builder
+                    .status(StatusCode::BAD_REQUEST)
+                    .body("Invalid or malformed url provided".to_string().into_bytes())
+                    .map_err(|e| e.into());
+            }
+            println!("Received request to open URL: {url}");
+
+            // Try to open the URL using the system's default browser
+            let result = if cfg!(target_os = "macos") {
+                Command::new("open").arg(url).output()
+            } else if cfg!(target_os = "windows") {
+                Command::new("cmd").args(["/c", "start", url]).output()
             } else {
-                let error_msg = String::from_utf8_lossy(&output.stderr);
-                eprintln!("❌ Failed to open URL: {error_msg}");
-                stream.write_all(b"ERROR\n")?;
+                // Linux and other Unix-like systems
+                // Try xdg-open first, then fallback to other options
+                Command::new("xdg-open")
+                    .arg(url)
+                    .output()
+                    .or_else(|_| Command::new("firefox").arg(url).output())
+                    .or_else(|_| Command::new("google-chrome").arg(url).output())
+                    .or_else(|_| Command::new("chromium").arg(url).output())
+            };
+
+            match result {
+                Ok(output) => {
+                    if output.status.success() {
+                        println!("✅ Successfully opened URL: {url}");
+                        response_builder
+                            .status(StatusCode::NO_CONTENT)
+                            .body(vec![])
+                            .map_err(|e| e.into())
+                    } else {
+                        let error_msg = String::from_utf8_lossy(&output.stderr);
+                        eprintln!("❌ Failed to open URL: {error_msg}");
+                        response_builder
+                            .status(StatusCode::INTERNAL_SERVER_ERROR)
+                            .body(format!("Error: {error_msg}").to_string().into_bytes())
+                            .map_err(|e| e.into())
+                    }
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to execute browser command: {e}");
+                    response_builder
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(format!("Error: {e}").to_string().into_bytes())
+                        .map_err(|e| e.into())
+                }
             }
         }
-        Err(e) => {
-            eprintln!("❌ Failed to execute browser command: {e}");
-            stream.write_all(b"ERROR\n")?;
-        }
+        _ => response_builder
+            .status(StatusCode::NOT_FOUND)
+            .body(
+                "No associated actions with this url"
+                    .to_string()
+                    .into_bytes(),
+            )
+            .map_err(|e| e.into()),
     }
-
-    Ok(())
 }
