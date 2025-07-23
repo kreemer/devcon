@@ -20,7 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use std::net::TcpListener;
+use std::io::Read;
 mod config;
 mod devcontainer;
 mod tui;
@@ -28,10 +28,7 @@ mod tui;
 use clap::{Parser, Subcommand};
 use indicatif::ProgressBar;
 use pidfile::PidFile;
-use simple_server::ResponseBuilder;
-use simple_server::StatusCode;
-use simple_server::{Method, Request};
-use simple_server::{ResponseResult, Server};
+use rouille::{Request, Response, Server};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -495,11 +492,11 @@ fn start_socket_server() -> Result<(), Box<dyn std::error::Error>> {
     let runtime_config_path = xdg::BaseDirectories::with_prefix("devcon")
         .place_config_file("runtime.yaml")
         .expect("Failed to create XDG base directories");
-    let listener = TcpListener::bind("127.0.0.1:0")?;
 
-    println!("Socket server started at {}", listener.local_addr()?);
+    let server = Server::new("localhost:0", handle_client).unwrap();
+    println!("Socket server started at {}", server.server_addr());
     let runtime_config = RuntimeConfig {
-        socket_address: Some(listener.local_addr()?.port()),
+        socket_address: Some(server.server_addr().port()),
     };
     let file = std::fs::OpenOptions::new()
         .write(true)
@@ -508,82 +505,59 @@ fn start_socket_server() -> Result<(), Box<dyn std::error::Error>> {
         .open(runtime_config_path)?;
     serde_yaml::to_writer(file, &runtime_config).unwrap();
 
-    let server = Server::new(handle_client);
-
-    server.listen_on_socket(listener);
+    server.run();
+    Ok(())
 }
 
-fn handle_client(
-    request: Request<Vec<u8>>,
-    mut response_builder: ResponseBuilder,
-) -> ResponseResult {
-    if request.method() != Method::POST {
-        return response_builder
-            .status(StatusCode::BAD_REQUEST)
-            .body("Only POST methods are implemented".to_string().into_bytes())
-            .map_err(|e| e.into());
+fn handle_client(request: &Request) -> Response {
+    if request.method() != "POST" {
+        return Response::text("Only POST methods are implemented").with_status_code(400);
     }
-    match request.uri().path() {
+    match request.url().as_str() {
         "/open" => {
-            let url = str::from_utf8(request.body().as_slice()).unwrap_or_default();
+            let mut url = String::new();
+            if let Some(mut data) = request.data() {
+                let _ = data.read_to_string(&mut url);
+            }
 
             if url.is_empty() {
-                return response_builder
-                    .status(StatusCode::BAD_REQUEST)
-                    .body("Invalid or malformed url provided".to_string().into_bytes())
-                    .map_err(|e| e.into());
+                return Response::text("Invalid url provided").with_status_code(400);
             }
             println!("Received request to open URL: {url}");
 
             // Try to open the URL using the system's default browser
             let result = if cfg!(target_os = "macos") {
-                Command::new("open").arg(url).output()
+                Command::new("open").arg(&url).output()
             } else if cfg!(target_os = "windows") {
-                Command::new("cmd").args(["/c", "start", url]).output()
+                Command::new("cmd").args(["/c", "start", &url]).output()
             } else {
                 // Linux and other Unix-like systems
                 // Try xdg-open first, then fallback to other options
                 Command::new("xdg-open")
-                    .arg(url)
+                    .arg(&url)
                     .output()
-                    .or_else(|_| Command::new("firefox").arg(url).output())
-                    .or_else(|_| Command::new("google-chrome").arg(url).output())
-                    .or_else(|_| Command::new("chromium").arg(url).output())
+                    .or_else(|_| Command::new("firefox").arg(&url).output())
+                    .or_else(|_| Command::new("google-chrome").arg(&url).output())
+                    .or_else(|_| Command::new("chromium").arg(&url).output())
             };
 
             match result {
                 Ok(output) => {
                     if output.status.success() {
                         println!("✅ Successfully opened URL: {url}");
-                        response_builder
-                            .status(StatusCode::NO_CONTENT)
-                            .body(vec![])
-                            .map_err(|e| e.into())
+                        Response::empty_204()
                     } else {
                         let error_msg = String::from_utf8_lossy(&output.stderr);
                         eprintln!("❌ Failed to open URL: {error_msg}");
-                        response_builder
-                            .status(StatusCode::INTERNAL_SERVER_ERROR)
-                            .body(format!("Error: {error_msg}").to_string().into_bytes())
-                            .map_err(|e| e.into())
+                        Response::text(format!("Error: {error_msg}")).with_status_code(500)
                     }
                 }
                 Err(e) => {
                     eprintln!("❌ Failed to execute browser command: {e}");
-                    response_builder
-                        .status(StatusCode::INTERNAL_SERVER_ERROR)
-                        .body(format!("Error: {e}").to_string().into_bytes())
-                        .map_err(|e| e.into())
+                    Response::text(format!("Error: {e}")).with_status_code(500)
                 }
             }
         }
-        _ => response_builder
-            .status(StatusCode::NOT_FOUND)
-            .body(
-                "No associated actions with this url"
-                    .to_string()
-                    .into_bytes(),
-            )
-            .map_err(|e| e.into()),
+        _ => Response::empty_404(),
     }
 }
