@@ -493,7 +493,7 @@ fn start_socket_server() -> Result<(), Box<dyn std::error::Error>> {
         .place_config_file("runtime.yaml")
         .expect("Failed to create XDG base directories");
 
-    let server = Server::new("localhost:0", handle_client).unwrap();
+    let server = Server::new("127.0.0.1:0", handle_client).unwrap();
     println!("Socket server started at {}", server.server_addr());
     let runtime_config = RuntimeConfig {
         socket_address: Some(server.server_addr().port()),
