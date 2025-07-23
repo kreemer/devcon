@@ -20,9 +20,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
-use std::rc::Rc;
+use std::net::TcpListener;
 mod config;
 mod devcontainer;
 mod tui;
@@ -30,17 +28,14 @@ mod tui;
 use clap::{Parser, Subcommand};
 use indicatif::ProgressBar;
 use pidfile::PidFile;
-use simple_server::Response;
 use simple_server::ResponseBuilder;
 use simple_server::StatusCode;
-use simple_server::{Builder, ResponseResult, Server};
 use simple_server::{Method, Request};
-use std::io::{BufRead, BufReader};
-use std::os::unix::net::UnixStream;
+use simple_server::{ResponseResult, Server};
+use std::fs;
+use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
-use std::{fs, thread};
-use std::{os::unix::net::UnixListener, path::PathBuf};
 
 use config::{ConfigManager, RuntimeConfig};
 use devcontainer::{check_devcontainer_cli, shell_devcontainer, up_devcontainer};
