@@ -464,7 +464,6 @@ fn handle_socket_command(daemon: bool) -> Result<(), Box<dyn std::error::Error>>
     fs::create_dir_all(&socket_directory)?;
     let socket_path = socket_directory.join("devcon.sock");
 
-    let socket_path = PathBuf::from("/var/run/devcon.sock");
     if fs::exists(&socket_path)? {
         fs::remove_file(&socket_path)?;
     }
