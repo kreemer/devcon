@@ -21,12 +21,13 @@
 // SOFTWARE.
 
 use minijinja::{Environment, Error, render};
+use pidfile::PidFile;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::process::Command;
 use std::{path::PathBuf, process::Stdio};
 
-use crate::config::{AppConfig, DevContainerContext};
+use crate::config::{AppConfig, DevContainerContext, RuntimeConfig};
 
 fn ensure_helper_script_exists() -> Result<(), Box<dyn std::error::Error>> {
     let xdg_dirs = xdg::BaseDirectories::with_prefix("devcon");
@@ -41,8 +42,6 @@ fn ensure_helper_script_exists() -> Result<(), Box<dyn std::error::Error>> {
 # DevCon Browser Helper Script - Auto-generated
 # This script allows opening URLs in the host's default browser from within a devcontainer
 
-SOCKET_PATH="/tmp/devcon-browser.sock"
-
 if [ $# -eq 0 ]; then
     echo "Usage: $0 <url>"
     echo "Example: $0 https://github.com"
@@ -51,17 +50,9 @@ fi
 
 URL="$1"
 
-if [ ! -S "$SOCKET_PATH" ]; then
-    echo "Error: DevCon browser socket not found at $SOCKET_PATH"
-    echo "Make sure the devcon socket server is running on the host:"
-    echo "  devcon socket --daemon"
-    echo "The socket is typically located in your XDG runtime directory on the host."
-    exit 1
-fi
-
 # Send the URL to the socket
-echo "$URL" | nc -U "$SOCKET_PATH" 2>/dev/null || {
-    echo "Error: Failed to send URL to socket. Is netcat (nc) installed?"
+curl -X POST -d "$URL" $DEVCON_SERVER/open || {
+    echo "Error: Failed to send URL to socket."
     exit 1
 }
 "#;
@@ -162,16 +153,8 @@ pub fn up_devcontainer(
         .get_data_home()
         .expect("Failed to create XDG base directories");
 
-    let socket_path = socket_directory.join("devcon.sock");
-    if fs::exists(&socket_path)? {
-        cmd.arg("--mount").arg(format!(
-            "type=bind,source={},target=/var/run/devcon.sock",
-            socket_path.display()
-        ));
-    }
-
-    let socket_script = socket_directory.join("devcon-browser.sh");
-    if fs::exists(&socket_path)? && ensure_helper_script_exists().is_ok() {
+    if ensure_helper_script_exists().is_ok() {
+        let socket_script = socket_directory.join("devcon-browser.sh");
         cmd.arg("--mount").arg(format!(
             "type=bind,source={},target=/opt/devcon-browser.sh",
             socket_script.display()
@@ -230,15 +213,24 @@ pub fn shell_devcontainer(
         cmd.arg("--remote-env").arg(env); // Assuming env is in "NAME=VALUE" format
     }
 
-    let xdg_dirs = xdg::BaseDirectories::with_prefix("devcon");
-    let socket_directory = xdg_dirs
-        .get_data_home()
+    let pidfile_path = xdg::BaseDirectories::with_prefix("devcon")
+        .get_state_home()
         .expect("Failed to create XDG base directories");
 
-    let socket_path = socket_directory.join("devcon.sock");
-    if fs::exists(&socket_path)? {
+    let runtime_config = read_runtime_config();
+    if PidFile::is_locked(&pidfile_path.join("devcon.pid")).unwrap_or(false)
+        && runtime_config.is_ok()
+    {
         cmd.arg("--remote-env")
             .arg("BROWSER=/opt/devcon-browser.sh");
+
+        cmd.arg("--remote-env").arg(format!(
+            "DEVCON_SERVER=host.docker.internal:{}",
+            runtime_config?
+                .socket_address
+                .map(|f| f.to_string())
+                .unwrap_or("".to_string())
+        ));
     }
 
     cmd.arg("zsh");
@@ -266,6 +258,17 @@ pub fn check_devcontainer_cli() -> Result<(), Box<dyn std::error::Error>> {
         Ok(_) => Err("DevContainer CLI is installed but not working properly".into()),
         Err(_) => Err("DevContainer CLI is not installed or not in PATH. Please install it with: npm install -g @devcontainers/cli".into()),
     }
+}
+
+fn read_runtime_config() -> Result<RuntimeConfig, Box<dyn std::error::Error>> {
+    let runtime_config_path = xdg::BaseDirectories::with_prefix("devcon")
+        .get_config_file("runtime.yaml")
+        .ok_or("No runtime config")?;
+
+    let reader = std::fs::File::open(runtime_config_path)?;
+    let runtime_config: RuntimeConfig = serde_yaml::from_reader(reader)?;
+
+    Ok(runtime_config)
 }
 
 #[cfg(test)]

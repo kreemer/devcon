@@ -24,6 +24,8 @@ serde = "1.0.219"
 serde_yaml = "0.9.34"
 xdg = "3.0.0"
 minijinja = "2.11.0"
+simple-server = "0.4.0"
+pidfile2 = "0.1.1"
 
 [dev-dependencies]
 tempfile = "3.8"

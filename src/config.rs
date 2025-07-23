@@ -22,8 +22,14 @@
 
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::str::FromStr;
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeConfig {
+    pub socket_address: Option<u16>,
+}
 
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
