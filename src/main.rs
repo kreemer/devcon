@@ -83,7 +83,7 @@ enum Commands {
         /// Environment variables which will be processed. Each should be denoted by KEY=VALUE
         #[arg(
             help = "Environment variables which will be processed. Each should be denoted by KEY=VALUE.",
-            value_name = "PATH"
+            value_name = "ENV"
         )]
         env: Vec<String>,
     },
@@ -317,7 +317,21 @@ fn handle_tui_mode(config_manager: &ConfigManager) -> Result<(), Box<dyn std::er
         Some(index) => {
             if let Some(path) = config.recent_paths.get(index) {
                 println!("Selected path: {}", path.display());
+
+                let pidfile_path = xdg::BaseDirectories::with_prefix("devcon")
+                    .get_state_home()
+                    .expect("Failed to create XDG base directories");
+
+                if !pidfile_path.exists() {
+                    fs::create_dir_all(&pidfile_path)?;
+                }
+
+                if !PidFile::is_locked(&pidfile_path.join("devcon.pid"))? {
+                    handle_socket_command(true)?;
+                }
+
                 up_devcontainer(path, &config)?;
+                shell_devcontainer(path, &vec![], &config)?;
             } else {
                 println!("Invalid selection.");
             }
