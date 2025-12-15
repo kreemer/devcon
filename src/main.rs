@@ -463,7 +463,6 @@ fn handle_socket_command(daemon: bool) -> Result<(), Box<dyn std::error::Error>>
     if !pidfile_path.exists() {
         fs::create_dir_all(&pidfile_path)?;
     }
-    let pidfile = PidFile::new(pidfile_path.join("devcon.pid"))?;
     if daemon {
         println!("Starting socket server in daemon mode");
         // For daemon mode, we could use a proper daemon library, but for now we'll just fork
@@ -471,7 +470,9 @@ fn handle_socket_command(daemon: bool) -> Result<(), Box<dyn std::error::Error>>
             -1 => return Err("Failed to fork process".into()),
             0 => {
                 // Child process
+                let pidfile = PidFile::new(pidfile_path.join("devcon.pid"))?;
                 start_socket_server()?;
+                drop(pidfile);
             }
             _pid => {
                 // Parent process
@@ -480,11 +481,12 @@ fn handle_socket_command(daemon: bool) -> Result<(), Box<dyn std::error::Error>>
             }
         }
     } else {
+        let pidfile = PidFile::new(pidfile_path.join("devcon.pid"))?;
         println!("Starting socket server");
         println!("Press Ctrl+C to stop the server");
         start_socket_server()?;
+        drop(pidfile);
     }
-    drop(pidfile);
     Ok(())
 }
 
