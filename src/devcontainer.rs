@@ -51,10 +51,7 @@ fi
 URL="$1"
 
 # Send the URL to the socket
-curl -X POST -d "$URL" $DEVCON_SERVER/open || {
-    echo "Error: Failed to send URL to socket."
-    exit 1
-}
+devcon-client $DEVCON_SERVER browser --url "$URL"
 "#;
 
     // Write the script if it doesn't exist or is outdated
@@ -168,8 +165,13 @@ pub fn up_devcontainer(
         return Err(format!("Failed to start devcontainer: {error}").into());
     }
 
-    println!("Successfully started devcontainer!");
-    println!("Output: {}", String::from_utf8_lossy(&output.stdout));
+    let json: serde_json::Value = serde_json::from_str(&*String::from_utf8_lossy(&output.stdout))
+        .expect("JSON was not well-formatted");
+
+    if let Some(container_id) = json.get("containerId") {
+        println!("Container with id {} started", container_id);
+    }
+
     Ok(())
 }
 
