@@ -1,4 +1,5 @@
 pub mod protos {
+    #![allow(clippy::all, clippy::pedantic, clippy::nursery)]
     include!(concat!(env!("OUT_DIR"), "/protobuf_generated/generated.rs"));
 }
 
@@ -15,7 +16,7 @@ pub trait TcpWithSize {
 impl TcpWithSize for TcpStream {
     fn send(&mut self, msg: &[u8]) -> Result<()> {
         println!("Transmitting {} bytes", msg.len());
-        self.write(&u32::try_from(msg.len()).unwrap().to_be_bytes())?;
+        self.write_all(&u32::try_from(msg.len()).unwrap().to_be_bytes())?;
         self.write_all(msg)?;
         Ok(())
     }
@@ -23,7 +24,7 @@ impl TcpWithSize for TcpStream {
     fn recieve(&mut self) -> Result<Vec<u8>> {
         let mut message_length_buffer: [u8; 4] = [0; 4];
         self.read_exact(&mut message_length_buffer)?;
-        let message_length: u32 = u32::from_be_bytes(message_length_buffer.try_into().unwrap());
+        let message_length: u32 = u32::from_be_bytes(message_length_buffer);
         println!("Recieving {} bytes", message_length);
         let mut recieve_buffer = vec![0; message_length as usize];
         self.read_exact(&mut recieve_buffer)?;

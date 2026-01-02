@@ -14,13 +14,13 @@ pub fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
             let url = browser.url().to_str().unwrap();
             // Try to open the URL using the system's default browser
             let result = if cfg!(target_os = "macos") {
-                Command::new("open").arg(&url).output()
+                Command::new("open").arg(url).output()
             } else if cfg!(target_os = "windows") {
-                Command::new("cmd").args(["/c", "start", &url]).output()
+                Command::new("cmd").args(["/c", "start", url]).output()
             } else {
                 // Linux and other Unix-like systems
                 // Try xdg-open first, then fallback to other options
-                Command::new("xdg-open").arg(&url).output()
+                Command::new("xdg-open").arg(url).output()
             };
 
             match result {
