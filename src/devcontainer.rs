@@ -165,7 +165,7 @@ pub fn up_devcontainer(
         return Err(format!("Failed to start devcontainer: {error}").into());
     }
 
-    let json: serde_json::Value = serde_json::from_str(&*String::from_utf8_lossy(&output.stdout))
+    let json: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&output.stdout))
         .expect("JSON was not well-formatted");
 
     if let Some(container_id) = json.get("containerId") {
