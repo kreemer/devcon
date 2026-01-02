@@ -50,6 +50,12 @@ jobs:
         with:
           toolchain: ${{ matrix.rust }}
 
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "33.2"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Cache Cargo dependencies
         uses: actions/cache@v3
         with:
@@ -80,6 +86,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "33.2"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache Cargo dependencies
         uses: actions/cache@v3
@@ -112,6 +124,12 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "33.2"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache Cargo dependencies
         uses: actions/cache@v3
