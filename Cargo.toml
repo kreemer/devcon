@@ -1,8 +1,16 @@
-[package]
-name = "devcon"
+[workspace]
+members = [".", "client", "proto"]
+
+[workspace.package]
 version = "0.1.5"
 edition = "2024"
 license = "MIT"
+
+[package]
+name = "devcon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "A blazingly fast TUI application for managing and launching development containers"
 repository = "https://github.com/kreemer/devcon"
 homepage = "https://github.com/kreemer/devcon"
@@ -25,7 +33,13 @@ serde_yaml = "0.9.34"
 xdg = "3.0.0"
 minijinja = "2.11.0"
 pidfile2 = "0.1.1"
-rouille = "3.6.2"
+devcon-proto = { path = "proto" }
+serde_json = "1.0.48"
+
+[dependencies.protobuf]
+package = "protobuf"
+version = "4.33.2-release"
 
 [dev-dependencies]
 tempfile = "3.8"
+

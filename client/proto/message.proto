@@ -1,0 +1,12 @@
+edition = "2023";
+
+package proto;
+
+import "google/protobuf/timestamp.proto";
+
+message Foo {
+  int32 int = 1;
+  repeated int32 numbers = 2;
+  string name = 3;
+  google.protobuf.Timestamp timestamp = 4;
+}

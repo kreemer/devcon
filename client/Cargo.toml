@@ -1,0 +1,13 @@
+[package]
+name = "devcon-client"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+clap = { version = "4.5.41", features = ["derive"] }
+devcon-proto = { path = "../proto" }
+
+[dependencies.protobuf]
+package = "protobuf"
+version = "4.33.2-release"

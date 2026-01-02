@@ -20,18 +20,20 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-use std::io::Read;
+use std::{
+    net::{Ipv4Addr, TcpListener},
+    thread,
+};
 mod config;
 mod devcontainer;
+mod server;
 mod tui;
 
 use clap::{Parser, Subcommand};
 use indicatif::ProgressBar;
 use pidfile::PidFile;
-use rouille::{Request, Response, Server};
 use std::fs;
 use std::path::PathBuf;
-use std::process::Command;
 use std::time::Duration;
 
 use config::{ConfigManager, RuntimeConfig};
@@ -94,9 +96,8 @@ enum Commands {
     #[command(subcommand, about = "Manage configuration settings for DevCon")]
     Config(ConfigCommands),
 
-    /// Manage configuration settings
-    #[command(about = "Handle the socket server for communication with the host")]
-    Socket {
+    #[command(about = "Handle the tcp server for communication with the host")]
+    Server {
         #[arg(short, long, help = "Run the socket server in a daemon")]
         daemon: bool,
     },
@@ -223,8 +224,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::Config(config_cmd)) => {
             handle_config_command(&config_manager, config_cmd)?;
         }
-        Some(Commands::Socket { daemon }) => {
-            handle_socket_command(*daemon)?;
+        Some(Commands::Server { daemon }) => {
+            handle_server_command(*daemon)?;
         }
         None => {
             handle_tui_mode(&config_manager)?;
@@ -455,7 +456,7 @@ fn handle_envs_command(
     Ok(())
 }
 
-fn handle_socket_command(daemon: bool) -> Result<(), Box<dyn std::error::Error>> {
+fn handle_server_command(daemon: bool) -> Result<(), Box<dyn std::error::Error>> {
     let pidfile_path = xdg::BaseDirectories::with_prefix("devcon")
         .get_state_home()
         .expect("Failed to create XDG base directories");
@@ -495,10 +496,10 @@ fn start_socket_server() -> Result<(), Box<dyn std::error::Error>> {
         .place_config_file("runtime.yaml")
         .expect("Failed to create XDG base directories");
 
-    let server = Server::new("0.0.0.0:0", handle_client).unwrap();
-    println!("Socket server started at {}", server.server_addr());
+    let listener_socket =
+        TcpListener::bind((Ipv4Addr::UNSPECIFIED, 0)).expect("Cannot create the socket.");
     let runtime_config = RuntimeConfig {
-        socket_address: Some(server.server_addr().port()),
+        socket_address: Some(listener_socket.local_addr().expect("should return").port()),
     };
     let file = std::fs::OpenOptions::new()
         .write(true)
@@ -507,59 +508,23 @@ fn start_socket_server() -> Result<(), Box<dyn std::error::Error>> {
         .open(runtime_config_path)?;
     serde_yaml::to_writer(file, &runtime_config).unwrap();
 
-    server.run();
-    Ok(())
-}
+    loop {
+        let new_incoming_connection = listener_socket.accept();
+        if let Ok(new_connection) = new_incoming_connection {
+            let new_connection = new_connection.0;
 
-fn handle_client(request: &Request) -> Response {
-    if request.method() != "POST" {
-        return Response::text("Only POST methods are implemented").with_status_code(400);
-    }
-    match request.url().as_str() {
-        "/open" => {
-            let mut url = String::new();
-            if let Some(mut data) = request.data() {
-                let _ = data.read_to_string(&mut url);
-            }
-
-            if url.is_empty() {
-                return Response::text("Invalid url provided").with_status_code(400);
-            }
-            println!("Received request to open URL: {url}");
-
-            // Try to open the URL using the system's default browser
-            let result = if cfg!(target_os = "macos") {
-                Command::new("open").arg(&url).output()
-            } else if cfg!(target_os = "windows") {
-                Command::new("cmd").args(["/c", "start", &url]).output()
-            } else {
-                // Linux and other Unix-like systems
-                // Try xdg-open first, then fallback to other options
-                Command::new("xdg-open")
-                    .arg(&url)
-                    .output()
-                    .or_else(|_| Command::new("firefox").arg(&url).output())
-                    .or_else(|_| Command::new("google-chrome").arg(&url).output())
-                    .or_else(|_| Command::new("chromium").arg(&url).output())
-            };
-
-            match result {
-                Ok(output) => {
-                    if output.status.success() {
-                        println!("✅ Successfully opened URL: {url}");
-                        Response::empty_204()
-                    } else {
-                        let error_msg = String::from_utf8_lossy(&output.stderr);
-                        eprintln!("❌ Failed to open URL: {error_msg}");
-                        Response::text(format!("Error: {error_msg}")).with_status_code(500)
-                    }
-                }
-                Err(e) => {
-                    eprintln!("❌ Failed to execute browser command: {e}");
-                    Response::text(format!("Error: {e}")).with_status_code(500)
-                }
-            }
+            // Launch new thread
+            let builder = thread::Builder::new().name(
+                new_connection
+                    .peer_addr()
+                    .expect("Should get peer information")
+                    .to_string(),
+            );
+            builder
+                .spawn(move || server::handle_connection(new_connection))
+                .expect("Couldn't create a thread.");
+        } else {
+            eprintln!("Couldn't establish incoming connection.");
         }
-        _ => Response::empty_404(),
     }
 }
