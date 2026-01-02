@@ -45,9 +45,6 @@ jobs:
           - os: macos-latest
             artifact_name: devcon
             asset_name: devcon-macos-amd64
-          - os: macos-14  # Apple Silicon
-            artifact_name: devcon
-            asset_name: devcon-macos-arm64
 
     steps:
       - name: Checkout repository
@@ -55,6 +52,12 @@ jobs:
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "33.2"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache Cargo dependencies
         uses: actions/cache@v3
@@ -97,6 +100,12 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - name: Install Protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: "33.2"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Cache Cargo dependencies
         uses: actions/cache@v3
