@@ -306,9 +306,13 @@ mod tests {
 
         // We can't easily test the actual command upution without devcontainer CLI installed
         // but we can test that it doesn't fail due to missing .devcontainer directory
-        if result.is_err() {
-            let error_msg = result.unwrap_err().to_string();
-            assert!(!error_msg.contains("No .devcontainer directory or devcontainer.json found"));
+        assert!(result.is_err());
+        if let Err(error_msg) = result {
+            assert!(
+                !error_msg
+                    .to_string()
+                    .contains("No .devcontainer directory or devcontainer.json found")
+            );
         }
     }
 
@@ -323,9 +327,13 @@ mod tests {
         let result = up_devcontainer(&temp_dir.path().to_path_buf(), &config);
 
         // We can test that it doesn't fail due to missing devcontainer config
-        if result.is_err() {
-            let error_msg = result.unwrap_err().to_string();
-            assert!(!error_msg.contains("No .devcontainer directory or devcontainer.json found"));
+        assert!(result.is_err());
+        if let Err(error_msg) = result {
+            assert!(
+                !error_msg
+                    .to_string()
+                    .contains("No .devcontainer directory or devcontainer.json found")
+            );
         }
     }
 
@@ -343,9 +351,13 @@ mod tests {
         let result = up_devcontainer(&temp_dir.path().to_path_buf(), &config);
 
         // We can test that it doesn't fail due to missing devcontainer config
-        if result.is_err() {
-            let error_msg = result.unwrap_err().to_string();
-            assert!(!error_msg.contains("No .devcontainer directory or devcontainer.json found"));
+        assert!(result.is_err());
+        if let Err(error_msg) = result {
+            assert!(
+                !error_msg
+                    .to_string()
+                    .contains("No .devcontainer directory or devcontainer.json found")
+            );
         }
     }
 
@@ -369,9 +381,13 @@ mod tests {
         let result = up_devcontainer(&temp_dir.path().to_path_buf(), &config);
 
         // We can test that it doesn't fail due to missing devcontainer config
-        if result.is_err() {
-            let error_msg = result.unwrap_err().to_string();
-            assert!(!error_msg.contains("No .devcontainer directory or devcontainer.json found"));
+        assert!(result.is_err());
+        if let Err(error_msg) = result {
+            assert!(
+                !error_msg
+                    .to_string()
+                    .contains("No .devcontainer directory or devcontainer.json found")
+            );
         }
     }
 
@@ -398,7 +414,12 @@ mod tests {
 
         // Should fail due to missing devcontainer CLI but not due to config issues
         assert!(result.is_err());
-        let error_msg = result.unwrap_err().to_string();
-        assert!(!error_msg.contains("No .devcontainer directory or devcontainer.json found"));
+        if let Err(error_msg) = result {
+            assert!(
+                !error_msg
+                    .to_string()
+                    .contains("No .devcontainer directory or devcontainer.json found")
+            );
+        }
     }
 }
