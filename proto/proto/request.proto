@@ -2,6 +2,15 @@ edition = "2023";
 
 package proto;
 
+message StartSocket {
+  uint32 port_number = 1;
+  string peer_address = 2;
+}
+
+message StopSocket {
+  uint32 port_number = 1;
+}
+
 message Browser {
   string url = 1;
 }
@@ -9,5 +18,7 @@ message Browser {
 message Request {
   oneof request_type {
     Browser browser = 1;
+    StartSocket start_socket = 2;
+    StopSocket stop_socket = 3;
   }
 }

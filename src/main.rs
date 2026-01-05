@@ -507,6 +507,10 @@ fn start_socket_server() -> Result<(), Box<dyn std::error::Error>> {
         .truncate(true)
         .open(runtime_config_path)?;
     serde_yaml::to_writer(file, &runtime_config).unwrap();
+    println!(
+        "Server Started at {}",
+        listener_socket.local_addr().expect("should return").port()
+    );
 
     loop {
         let new_incoming_connection = listener_socket.accept();

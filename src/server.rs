@@ -1,8 +1,14 @@
-use std::{net::TcpStream, process::Command};
+use std::{
+    net::{TcpListener, TcpStream},
+    process::Command,
+};
 
 use devcon_proto::{
     TcpWithSize,
-    protos::{Request, request::RequestTypeOneof::Browser},
+    protos::{
+        Request, request::RequestTypeOneof::Browser, request::RequestTypeOneof::StartSocket,
+        request::RequestTypeOneof::StopSocket,
+    },
 };
 use protobuf::Parse;
 
@@ -36,6 +42,36 @@ pub fn handle_connection(mut stream: TcpStream) -> std::io::Result<()> {
                     eprintln!("❌ Failed to execute browser command: {e}");
                 }
             }
+        }
+        StartSocket(socket) => {
+            let port = socket.port_number();
+            let peer = socket.peer_address();
+            println!("Port Number: {}", port);
+            println!("Peer address: {}", peer);
+
+            let effective_port: u16;
+
+            match u16::try_from(port) {
+                Ok(port) => {
+                    if openport::is_free_tcp(port) {
+                        effective_port = port
+                    } else {
+                        effective_port = 0;
+                    }
+                }
+                Err(_) => {
+                    effective_port = 0;
+                }
+            }
+
+            let listener = TcpListener::bind(format!("0.0.0.0:{}", effective_port)).expect("fail");
+            loop {
+                TcpStream::connect(peer);
+            }
+        }
+        StopSocket(socket) => {
+            let port = socket.port_number();
+            println!("Port Number: {}", port);
         }
         _ => panic!("Non request type found"),
     }

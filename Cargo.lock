@@ -437,6 +437,7 @@ dependencies = [
  "indicatif",
  "libc",
  "minijinja",
+ "openport",
  "pidfile2",
  "protobuf",
  "ratatui 0.29.0",
@@ -791,6 +792,12 @@ name = "once_cell_polyfill"
 version = "1.70.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a4895175b425cb1f87721b59f0f286c2092bd4af812243672510e1ac53e2e0ad"
+
+[[package]]
+name = "openport"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "365c699f76305b3e62588961a288be10f0819ef1391f25870a69b35a213577cc"
 
 [[package]]
 name = "ordered-multimap"
