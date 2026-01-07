@@ -1,425 +1,159 @@
-// MIT License
-//
-// Copyright (c) 2025 DevCon Contributors
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
-
-use minijinja::{Environment, Error, render};
-use pidfile::PidFile;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
-use std::process::Command;
-use std::{path::PathBuf, process::Stdio};
+use std::path::PathBuf;
 
-use crate::config::{AppConfig, DevContainerContext, RuntimeConfig};
+use anyhow::bail;
+use serde::Deserialize;
+use serde::Serialize;
 
-fn ensure_helper_script_exists() -> Result<(), Box<dyn std::error::Error>> {
-    let xdg_dirs = xdg::BaseDirectories::with_prefix("devcon");
-    let socket_directory = xdg_dirs
-        .get_data_home()
-        .expect("Failed to create XDG base directories");
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Devcontainer {
+    pub name: String,
+    pub image: String,
+    pub features: Vec<Feature>,
+}
 
-    let script_path = socket_directory.join("devcon-browser.sh");
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Feature {
+    pub url: String,
+    pub options: serde_json::Value,
+}
 
-    // Create the helper script content
-    let script_content = r#"#!/bin/bash
-# DevCon Browser Helper Script - Auto-generated
-# This script allows opening URLs in the host's default browser from within a devcontainer
+impl Feature {
+    pub fn get_registry(&self) -> anyhow::Result<String> {
+        let parts: Vec<&str> = self.url.split('/').collect();
+        if parts.is_empty() {
+            bail!("Invalid feature URL")
+        }
+        Ok(parts.get(0).unwrap().to_string())
+    }
 
-if [ $# -eq 0 ]; then
-    echo "Usage: $0 <url>"
-    echo "Example: $0 https://github.com"
-    exit 1
-fi
+    pub fn get_name(&self) -> anyhow::Result<String> {
+        let mut parts: Vec<&str> = self.url.split('/').collect();
 
-URL="$1"
+        let name_part = parts.pop();
+        let name = name_part
+            .unwrap()
+            .split(':')
+            .nth(0)
+            .unwrap_or("unknown")
+            .to_string();
+        Ok(name)
+    }
 
-# Send the URL to the socket
-devcon-client $DEVCON_SERVER browser --url "$URL"
-"#;
+    pub fn get_version(&self) -> anyhow::Result<String> {
+        let parts: Vec<&str> = self.url.split('/').collect();
 
-    // Write the script if it doesn't exist or is outdated
-    if !script_path.exists()
-        || fs::read_to_string(&script_path).map_or(true, |content| content != script_content)
-    {
-        // Ensure parent directory exists
-        if let Some(parent) = script_path.parent() {
-            fs::create_dir_all(parent)?;
+        if parts[parts.len() - 1].contains(':') {
+            let version_part = parts.clone().pop();
+            let version = version_part.unwrap().split(':').nth(1).unwrap_or("latest");
+            return Ok(version.to_string());
         }
 
-        fs::write(&script_path, script_content)?;
-
-        // Make it executable
-        let mut perms = fs::metadata(&script_path)?.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&script_path, perms)?;
+        Ok("latest".to_string())
     }
 
-    Ok(())
-}
+    pub fn get_repository(&self) -> anyhow::Result<String> {
+        let parts: Vec<&str> = self.url.split('/').collect();
 
-fn exec_minijinja(command: String, arguments: Vec<String>) -> Result<String, Error> {
-    let mut cmd = Command::new(command);
-    for argument in arguments {
-        cmd.arg(argument.clone());
-    }
+        let mut repo_parts: Vec<&str> = Vec::new();
+        for part in &parts {
+            repo_parts.push(part);
+        }
+        repo_parts.pop();
 
-    let output = cmd.output().map_err(|e| {
-        Error::new(
-            minijinja::ErrorKind::InvalidOperation,
-            "Could not execute command",
-        )
-        .with_source(e)
-    })?;
+        let repository = String::from(
+            repo_parts
+                .iter()
+                .skip(1)
+                .cloned()
+                .collect::<Vec<&str>>()
+                .join("/"),
+        );
 
-    if !output.clone().status.success() {
-        return Err(Error::new(minijinja::ErrorKind::InvalidOperation, "Error"));
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-
-    Ok(stdout.to_string().trim().to_string())
-}
-
-pub fn up_devcontainer(
-    path: &PathBuf,
-    config: &AppConfig,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Check if the path has a .devcontainer directory or devcontainer.json
-    let devcontainer_dir = path.join(".devcontainer");
-    let devcontainer_file = path.join("devcontainer.json");
-
-    if !devcontainer_dir.exists() && !devcontainer_file.exists() {
-        return Err(format!(
-            "No .devcontainer directory or devcontainer.json found in {}",
-            path.display()
-        )
-        .into());
-    }
-
-    let mut environment = Environment::new();
-    environment.add_function("exec", exec_minijinja);
-
-    // Build devcontainer command
-    let mut cmd = Command::new("devcontainer");
-    cmd.arg("up").arg("--workspace-folder").arg(path);
-
-    // Add dotfiles repository if configured
-    if let Some(ref dotfiles_repo) = config.dotfiles_repo {
-        cmd.arg("--dotfiles-repository").arg(dotfiles_repo);
-    }
-
-    // Add additional features if configured
-    if !config.additional_features.is_empty() {
-        let additional_features_string: &String = &config
-            .additional_features
-            .iter()
-            .map(|(f, v)| format!("\"{f}\": {v}"))
-            .collect::<Vec<String>>()
-            .join(", ");
-        cmd.arg("--additional-features")
-            .arg(format!("{{ {additional_features_string} }}"));
-    }
-
-    // Add variables to build and up context
-    for env in config.list_env_by_context(DevContainerContext::Up) {
-        cmd.arg("--remote-env").arg(format!(
-            "{}={}",
-            env.name,
-            render!(in environment, &env.value)
-        ));
-    }
-
-    let xdg_dirs = xdg::BaseDirectories::with_prefix("devcon");
-    let socket_directory = xdg_dirs
-        .get_data_home()
-        .expect("Failed to create XDG base directories");
-
-    if ensure_helper_script_exists().is_ok() {
-        let socket_script = socket_directory.join("devcon-browser.sh");
-        cmd.arg("--mount").arg(format!(
-            "type=bind,source={},target=/opt/devcon-browser.sh",
-            socket_script.display()
-        ));
-    }
-
-    let output = cmd.output()?;
-
-    if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Failed to start devcontainer: {error}").into());
-    }
-
-    let json: serde_json::Value = serde_json::from_str(&String::from_utf8_lossy(&output.stdout))
-        .expect("JSON was not well-formatted");
-
-    if let Some(container_id) = json.get("containerId") {
-        println!("Container with id {} started", container_id);
-    }
-
-    Ok(())
-}
-
-pub fn shell_devcontainer(
-    path: &PathBuf,
-    env_list: &Vec<String>,
-    config: &AppConfig,
-) -> Result<(), Box<dyn std::error::Error>> {
-    // Check if the path has a .devcontainer directory or devcontainer.json
-    let devcontainer_dir = path.join(".devcontainer");
-    let devcontainer_file = path.join("devcontainer.json");
-
-    if !devcontainer_dir.exists() && !devcontainer_file.exists() {
-        return Err(format!(
-            "No .devcontainer directory or devcontainer.json found in {}",
-            path.display()
-        )
-        .into());
-    }
-
-    let mut environment = Environment::new();
-    environment.add_function("exec", exec_minijinja);
-
-    // Build devcontainer command
-    let mut cmd = Command::new("devcontainer");
-    cmd.stdin(Stdio::inherit())
-        .stdout(Stdio::inherit())
-        .stderr(Stdio::inherit());
-    cmd.arg("exec").arg("--workspace-folder").arg(path);
-
-    // Add variables to build and up context
-    for env in config.list_env_by_context(DevContainerContext::Exec) {
-        cmd.arg("--remote-env").arg(format!(
-            "{}={}",
-            env.name,
-            render!(in environment, &env.value)
-        ));
-    }
-
-    for env in env_list {
-        cmd.arg("--remote-env").arg(env); // Assuming env is in "NAME=VALUE" format
-    }
-
-    let pidfile_path = xdg::BaseDirectories::with_prefix("devcon")
-        .get_state_home()
-        .expect("Failed to create XDG base directories");
-
-    let runtime_config = read_runtime_config();
-    if PidFile::is_locked(&pidfile_path.join("devcon.pid")).unwrap_or(false)
-        && runtime_config.is_ok()
-    {
-        cmd.arg("--remote-env")
-            .arg("BROWSER=/opt/devcon-browser.sh");
-
-        cmd.arg("--remote-env").arg(format!(
-            "DEVCON_SERVER=host.docker.internal:{}",
-            runtime_config?
-                .socket_address
-                .map(|f| f.to_string())
-                .unwrap_or("".to_string())
-        ));
-    }
-
-    cmd.arg("zsh");
-
-    let output = cmd.output()?;
-
-    if !output.status.success() {
-        let error = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Failed to up devcontainer: {error}").into());
-    }
-
-    Ok(())
-}
-
-pub fn check_devcontainer_cli() -> Result<(), Box<dyn std::error::Error>> {
-    // Check if devcontainer CLI is available
-    let output = Command::new("devcontainer").arg("--version").output();
-
-    match output {
-        Ok(output) if output.status.success() => {
-            let version = String::from_utf8_lossy(&output.stdout);
-            println!("✅ DevContainer CLI version: {}", version.trim());
-            Ok(())
-        },
-        Ok(_) => Err("DevContainer CLI is installed but not working properly".into()),
-        Err(_) => Err("DevContainer CLI is not installed or not in PATH. Please install it with: npm install -g @devcontainers/cli".into()),
+        Ok(repository)
     }
 }
 
-fn read_runtime_config() -> Result<RuntimeConfig, Box<dyn std::error::Error>> {
-    let runtime_config_path = xdg::BaseDirectories::with_prefix("devcon")
-        .get_config_file("runtime.yaml")
-        .ok_or("No runtime config")?;
+impl TryFrom<PathBuf> for Devcontainer {
+    type Error = anyhow::Error;
 
-    let reader = std::fs::File::open(runtime_config_path)?;
-    let runtime_config: RuntimeConfig = serde_yaml::from_reader(reader)?;
+    fn try_from(path: PathBuf) -> std::result::Result<Self, Self::Error> {
+        let final_path = path.join(".devcontainer").join("devcontainer.json");
+        if !fs::exists(&final_path).is_ok() {
+            bail!(
+                "Devcontainer definition not found in {}",
+                &final_path.to_string_lossy()
+            )
+        }
 
-    Ok(runtime_config)
+        let file_result = fs::read_to_string(&final_path);
+
+        if !file_result.is_ok() {
+            bail!(
+                "Devcontainer definition cannot be read {}",
+                &final_path.to_string_lossy()
+            )
+        }
+
+        let result = Self::try_from(file_result.unwrap());
+        if result.is_err() {
+            bail!("Devcontainer content could not be parsed")
+        }
+
+        Ok(result.unwrap())
+    }
+}
+
+impl TryFrom<String> for Devcontainer {
+    type Error = serde_json::Error;
+
+    fn try_from(content: String) -> std::result::Result<Self, Self::Error> {
+        serde_json::from_str(&content)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use tempfile::TempDir;
 
     #[test]
-    fn test_up_devcontainer_no_devcontainer_config() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = AppConfig::default();
-        let result = up_devcontainer(&temp_dir.path().to_path_buf(), &config);
-
-        assert!(result.is_err());
-        assert!(
-            result
-                .unwrap_err()
-                .to_string()
-                .contains("No .devcontainer directory or devcontainer.json found")
-        );
-    }
-
-    #[test]
-    fn test_up_devcontainer_with_devcontainer_dir() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = AppConfig::default();
-        let devcontainer_path = temp_dir.path().join(".devcontainer");
-        fs::create_dir(&devcontainer_path).unwrap();
-
-        // This test will fail if devcontainer CLI is not installed, which is expected
-        let result = up_devcontainer(&temp_dir.path().to_path_buf(), &config);
-
-        // We can't easily test the actual command upution without devcontainer CLI installed
-        // but we can test that it doesn't fail due to missing .devcontainer directory
-        assert!(result.is_err());
-        if let Err(error_msg) = result {
-            assert!(
-                !error_msg
-                    .to_string()
-                    .contains("No .devcontainer directory or devcontainer.json found")
-            );
-        }
-    }
-
-    #[test]
-    fn test_up_devcontainer_with_devcontainer_json() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = AppConfig::default();
-        let devcontainer_file = temp_dir.path().join("devcontainer.json");
-        fs::write(&devcontainer_file, "{}").unwrap();
-
-        // This test will fail if devcontainer CLI is not installed, which is expected
-        let result = up_devcontainer(&temp_dir.path().to_path_buf(), &config);
-
-        // We can test that it doesn't fail due to missing devcontainer config
-        assert!(result.is_err());
-        if let Err(error_msg) = result {
-            assert!(
-                !error_msg
-                    .to_string()
-                    .contains("No .devcontainer directory or devcontainer.json found")
-            );
-        }
-    }
-
-    #[test]
-    fn test_up_devcontainer_with_dotfiles() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = AppConfig {
-            dotfiles_repo: Some("https://github.com/user/dotfiles".to_string()),
-            ..Default::default()
+    fn test_parsing_feature_registry() {
+        let feature = Feature {
+            url: "ghcr.io/devcontainers/features/github-cli:1".to_string(),
+            options: serde_json::Value::Null,
         };
-        let devcontainer_file = temp_dir.path().join("devcontainer.json");
-        fs::write(&devcontainer_file, "{}").unwrap();
 
-        // This test will fail if devcontainer CLI is not installed, which is expected
-        let result = up_devcontainer(&temp_dir.path().to_path_buf(), &config);
-
-        // We can test that it doesn't fail due to missing devcontainer config
-        assert!(result.is_err());
-        if let Err(error_msg) = result {
-            assert!(
-                !error_msg
-                    .to_string()
-                    .contains("No .devcontainer directory or devcontainer.json found")
-            );
-        }
+        assert!(feature.get_registry().is_ok());
+        assert_eq!("ghcr.io", feature.get_registry().unwrap());
     }
-
     #[test]
-    fn test_up_devcontainer_with_additional_features() {
-        let temp_dir = TempDir::new().unwrap();
-        let mut config = AppConfig::default();
-        config.additional_features.insert(
-            "ghcr.io/devcontainers/features/github-cli:1".to_string(),
-            "latest".to_string(),
-        );
-        config.additional_features.insert(
-            "ghcr.io/devcontainers/features/docker-in-docker:2".to_string(),
-            "20.10".to_string(),
-        );
+    fn test_parsing_feature_repository() {
+        let feature = Feature {
+            url: "ghcr.io/devcontainers/features/github-cli:1".to_string(),
+            options: serde_json::Value::Null,
+        };
 
-        let devcontainer_file = temp_dir.path().join("devcontainer.json");
-        fs::write(&devcontainer_file, "{}").unwrap();
-
-        // This test will fail if devcontainer CLI is not installed, which is expected
-        let result = up_devcontainer(&temp_dir.path().to_path_buf(), &config);
-
-        // We can test that it doesn't fail due to missing devcontainer config
-        assert!(result.is_err());
-        if let Err(error_msg) = result {
-            assert!(
-                !error_msg
-                    .to_string()
-                    .contains("No .devcontainer directory or devcontainer.json found")
-            );
-        }
+        assert!(feature.get_repository().is_ok());
+        assert_eq!("devcontainers/features", feature.get_repository().unwrap());
     }
-
     #[test]
-    fn test_browser_env_variable_list_in_shell_command() {
-        let temp_dir = TempDir::new().unwrap();
-        let config = AppConfig::default();
+    fn test_parsing_feature_name() {
+        let feature = Feature {
+            url: "ghcr.io/devcontainers/features/github-cli:1".to_string(),
+            options: serde_json::Value::Null,
+        };
 
-        let devcontainer_file = temp_dir.path().join("devcontainer.json");
-        fs::write(&devcontainer_file, "{}").unwrap();
+        assert!(feature.get_name().is_ok());
+        assert_eq!("github-cli", feature.get_name().unwrap());
+    }
+    #[test]
+    fn test_parsing_feature_version() {
+        let feature = Feature {
+            url: "ghcr.io/devcontainers/features/github-cli:1".to_string(),
+            options: serde_json::Value::Null,
+        };
 
-        // Create a temporary socket file
-        let socket_dir = temp_dir.path().join("socket_test");
-        fs::create_dir_all(&socket_dir).unwrap();
-        let socket_file = socket_dir.join("browser.sock");
-        fs::write(&socket_file, "").unwrap();
-
-        // Test shell_devcontainer
-        let result = shell_devcontainer(
-            &temp_dir.path().to_path_buf(),
-            &vec!["A=B".to_string(), "C=D".to_string()],
-            &config,
-        );
-
-        // Should fail due to missing devcontainer CLI but not due to config issues
-        assert!(result.is_err());
-        if let Err(error_msg) = result {
-            assert!(
-                !error_msg
-                    .to_string()
-                    .contains("No .devcontainer directory or devcontainer.json found")
-            );
-        }
+        assert!(feature.get_version().is_ok());
+        assert_eq!("1", feature.get_version().unwrap());
     }
 }
