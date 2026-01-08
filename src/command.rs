@@ -91,6 +91,7 @@ pub fn handle_config_command() -> anyhow::Result<()> {
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
+    let canonical_path = std::fs::canonicalize(&path)?;
     let config = Config::load()?;
     let mut devcontainer = Devcontainer::try_from(path)?;
 
@@ -98,7 +99,11 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
     devcontainer.merge_additional_features(&config.additional_features)?;
 
     let driver = ContainerDriver::new(&devcontainer);
-    driver.build(config.dotfiles_repository.as_deref(), &config.env_variables)?;
+    driver.build(
+        canonical_path,
+        config.dotfiles_repository.as_deref(),
+        &vec![],
+    )?;
 
     Ok(())
 }
@@ -135,27 +140,29 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
-    let config = Config::load()?;
     let devcontainer = Devcontainer::try_from(path.clone())?;
     let canonical_path = std::fs::canonicalize(&path)?;
     let driver = ContainerDriver::new(&devcontainer);
-    driver.start(canonical_path, &config.env_variables)?;
+    driver.start(canonical_path, &vec![])?;
 
     Ok(())
 }
 
 /// Handles the shell command for opening a shell in a running container.
 ///
-/// **Note:** This function is currently a placeholder and not yet implemented.
-///
 /// # Arguments
 ///
-/// * `_path` - Optional path to the project directory (currently unused)
+/// * `path` - Path to the project directory
 /// * `_env` - Environment variables to pass to the shell (currently unused)
 ///
 /// # Errors
 ///
 /// Currently always returns `Ok(())` as it's not implemented.
-pub fn handle_shell_command(_path: Option<&PathBuf>, _env: &[String]) -> anyhow::Result<()> {
+pub fn handle_shell_command(path: PathBuf, _env: &[String]) -> anyhow::Result<()> {
+    let config = Config::load()?;
+    let devcontainer = Devcontainer::try_from(path.clone())?;
+    let canonical_path = std::fs::canonicalize(&path)?;
+    let driver = ContainerDriver::new(&devcontainer);
+    driver.shell(canonical_path, &config.env_variables, config.default_shell)?;
     Ok(())
 }
