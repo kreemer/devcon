@@ -27,20 +27,46 @@
 //!
 //! Each handler function corresponds to a CLI subcommand and is responsible for:
 //! - Loading and parsing devcontainer configuration
+//! - Loading user configuration from XDG directories
+//! - Merging configuration settings
 //! - Creating necessary driver instances
 //! - Executing the requested operation
 //! - Handling errors and returning results
 
 use std::path::PathBuf;
 
-use crate::{devcontainer::Devcontainer, driver::container::ContainerDriver};
+use crate::{config::Config, devcontainer::Devcontainer, driver::container::ContainerDriver};
+
+/// Handles the config command to display the config file path.
+///
+/// This function prints the path to the DevCon configuration file,
+/// which is typically located at `~/.config/devcon/config.yaml`.
+///
+/// # Errors
+///
+/// Returns an error if the config directory cannot be determined.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use devcon::command::handle_config_command;
+/// handle_config_command()?;
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+pub fn handle_config_command() -> anyhow::Result<()> {
+    let config_path = Config::get_config_path()?;
+    println!("{}", config_path.display());
+    Ok(())
+}
 
 /// Handles the build command for creating a development container.
 ///
 /// This function:
-/// 1. Loads the devcontainer configuration from the specified path
-/// 2. Creates a `ContainerDriver` instance
-/// 3. Builds the container image with all configured features
+/// 1. Loads the user configuration from XDG directories
+/// 2. Loads the devcontainer configuration from the specified path
+/// 3. Merges additional features from user config
+/// 4. Creates a `ContainerDriver` instance
+/// 5. Builds the container image with all configured features
 ///
 /// # Arguments
 ///
@@ -50,6 +76,7 @@ use crate::{devcontainer::Devcontainer, driver::container::ContainerDriver};
 ///
 /// Returns an error if:
 /// - The devcontainer configuration cannot be found or parsed
+/// - Additional features cannot be merged
 /// - The container build process fails
 /// - Required dependencies are missing
 ///
@@ -64,9 +91,14 @@ use crate::{devcontainer::Devcontainer, driver::container::ContainerDriver};
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
-    let devcontainer = Devcontainer::try_from(path)?;
+    let config = Config::load()?;
+    let mut devcontainer = Devcontainer::try_from(path)?;
+
+    // Merge additional features from config
+    devcontainer.merge_additional_features(&config.additional_features)?;
+
     let driver = ContainerDriver::new(&devcontainer);
-    driver.build()?;
+    driver.build(config.dotfiles_repository.as_deref(), &config.env_variables)?;
 
     Ok(())
 }
@@ -74,10 +106,11 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
 /// Handles the start command for launching a development container.
 ///
 /// This function:
-/// 1. Loads the devcontainer configuration from the specified path
-/// 2. Resolves the canonical path to the project directory
-/// 3. Creates a `ContainerDriver` instance
-/// 4. Starts the container with the project mounted as a volume
+/// 1. Loads the user configuration from XDG directories
+/// 2. Loads the devcontainer configuration from the specified path
+/// 3. Resolves the canonical path to the project directory
+/// 4. Creates a `ContainerDriver` instance
+/// 5. Starts the container with the project mounted as a volume and env variables
 ///
 /// # Arguments
 ///
@@ -102,10 +135,11 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
+    let config = Config::load()?;
     let devcontainer = Devcontainer::try_from(path.clone())?;
     let canonical_path = std::fs::canonicalize(&path)?;
     let driver = ContainerDriver::new(&devcontainer);
-    driver.start(canonical_path)?;
+    driver.start(canonical_path, &config.env_variables)?;
 
     Ok(())
 }

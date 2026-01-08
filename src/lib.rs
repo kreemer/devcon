@@ -24,3 +24,6 @@
 //!
 //! This library provides core functionality for the DevCon CLI tool.
 //! Currently serves as a placeholder for potential library exports in the future.
+
+pub mod config;
+pub mod devcontainer;

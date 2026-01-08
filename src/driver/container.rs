@@ -104,10 +104,15 @@ impl<'a> ContainerDriver<'a> {
     /// This method:
     /// 1. Creates a temporary directory for the build context
     /// 2. Downloads and extracts all configured features
-    /// 3. Generates a Dockerfile with feature installations
+    /// 3. Generates a Dockerfile with feature installations and dotfiles setup
     /// 4. Builds the container image using the `container` CLI tool
     ///
     /// The resulting image is tagged as `devcon-{container_name}`.
+    ///
+    /// # Arguments
+    ///
+    /// * `dotfiles_repo` - Optional URL to a dotfiles repository to clone
+    /// * `env_variables` - Environment variables to set in the container
     ///
     /// # Errors
     ///
@@ -125,11 +130,15 @@ impl<'a> ContainerDriver<'a> {
     /// # fn example() -> anyhow::Result<()> {
     /// let config = Devcontainer::try_from(PathBuf::from("/project"))?;
     /// let driver = ContainerDriver::new(&config);
-    /// driver.build()?;
+    /// driver.build(Some("https://github.com/user/dotfiles"), &["EDITOR=vim".to_string()])?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn build(&self) -> anyhow::Result<()> {
+    pub fn build(
+        &self,
+        dotfiles_repo: Option<&str>,
+        env_variables: &[String],
+    ) -> anyhow::Result<()> {
         let directory = TempDir::new()?;
 
         let processed_features = process_features(&self.devcontainer.features, &directory)?;
@@ -152,16 +161,32 @@ impl<'a> ContainerDriver<'a> {
             feature_install.push_str(&format!("RUN /opt/{}/install.sh \n", feature_name));
         }
 
+        // Add environment variables
+        let mut env_setup = String::new();
+        for env_var in env_variables {
+            env_setup.push_str(&format!("ENV {}\n", env_var));
+        }
+
+        // Add dotfiles setup if repository is provided
+        let dotfiles_setup = if let Some(repo) = dotfiles_repo {
+            format!(
+                "RUN git clone {} /root/.dotfiles && cd /root/.dotfiles && ./install.sh || true\n",
+                repo
+            )
+        } else {
+            String::new()
+        };
+
         let dockerfile = directory.path().join("Dockerfile");
         File::create(&dockerfile)?;
 
         let contents = format!(
             r#"
 FROM {}
-{}
+{}{}{}
 CMD ["sleep", "infinity"]
     "#,
-            self.devcontainer.image, feature_install
+            self.devcontainer.image, feature_install, env_setup, dotfiles_setup
         );
 
         fs::write(&dockerfile, contents)?;
@@ -187,12 +212,14 @@ CMD ["sleep", "infinity"]
     ///
     /// This method starts a container in detached mode with:
     /// - The project directory mounted at `/workspaces/{project_name}`
+    /// - Environment variables from the config
     /// - Automatic removal on exit (`--rm` flag)
     /// - Detached mode (`-d` flag)
     ///
     /// # Arguments
     ///
     /// * `path` - The path to the project directory to mount
+    /// * `env_variables` - Environment variables to pass to the container
     ///
     /// # Errors
     ///
@@ -210,24 +237,27 @@ CMD ["sleep", "infinity"]
     /// # fn example() -> anyhow::Result<()> {
     /// let config = Devcontainer::try_from(PathBuf::from("/project"))?;
     /// let driver = ContainerDriver::new(&config);
-    /// driver.build()?;
-    /// driver.start(PathBuf::from("/project"))?;
+    /// driver.build(None, &[])?;
+    /// driver.start(PathBuf::from("/project"), &["EDITOR=vim".to_string()])?;
     /// # Ok(())
     /// # }
     /// ```
-    pub fn start(&self, path: PathBuf) -> anyhow::Result<()> {
-        let result = Command::new("container")
-            .arg("run")
-            .arg("--rm")
-            .arg("-d")
-            .arg("-v")
-            .arg(format!(
-                "{}:/workspaces/{}",
-                path.to_string_lossy(),
-                path.file_name().unwrap().to_string_lossy()
-            ))
-            .arg(self.get_image_tag())
-            .status();
+    pub fn start(&self, path: PathBuf, env_variables: &[String]) -> anyhow::Result<()> {
+        let mut cmd = Command::new("container");
+        cmd.arg("run").arg("--rm").arg("-d").arg("-v").arg(format!(
+            "{}:/workspaces/{}",
+            path.to_string_lossy(),
+            path.file_name().unwrap().to_string_lossy()
+        ));
+
+        // Add environment variables
+        for env_var in env_variables {
+            cmd.arg("-e").arg(env_var);
+        }
+
+        cmd.arg(self.get_image_tag());
+
+        let result = cmd.status();
 
         if result.is_err() {
             bail!("Failed to start container")

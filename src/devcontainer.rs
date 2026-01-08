@@ -143,6 +143,49 @@ impl Devcontainer {
     pub fn get_computed_name(&self) -> String {
         self.name.clone().unwrap_or_else(|| "default".to_string())
     }
+
+    /// Merges additional features from configuration into this devcontainer.
+    ///
+    /// This method adds features from the config that aren't already present
+    /// in the devcontainer.json. Existing features take precedence.
+    ///
+    /// # Arguments
+    ///
+    /// * `additional_features` - HashMap of feature URLs to their options
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any additional feature cannot be parsed.
+    pub fn merge_additional_features(
+        &mut self,
+        additional_features: &std::collections::HashMap<String, serde_json::Value>,
+    ) -> anyhow::Result<()> {
+        use std::collections::HashSet;
+
+        // Get set of existing feature URLs
+        let existing_urls: HashSet<String> = self
+            .features
+            .iter()
+            .filter_map(|f| match &f.source {
+                FeatureSource::Registry { registry, .. } => Some(format!(
+                    "ghcr.io/{}/{}/{}:{}",
+                    registry.owner, registry.repository, registry.name, registry.version
+                )),
+                FeatureSource::Local { path } => Some(path.to_string_lossy().to_string()),
+            })
+            .collect();
+
+        // Add features that don't already exist
+        for (url, options) in additional_features {
+            if !existing_urls.contains(url) {
+                let feature = parse_feature::<serde::de::value::Error>(url, options.clone())
+                    .map_err(|e| anyhow::anyhow!("Failed to parse additional feature: {}", e))?;
+                self.features.push(feature);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
