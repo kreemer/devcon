@@ -26,6 +26,7 @@ use std::path::PathBuf;
 use crate::command::*;
 
 mod command;
+mod config;
 mod devcontainer;
 mod driver;
 
@@ -81,6 +82,9 @@ enum Commands {
         )]
         env: Vec<String>,
     },
+    /// Prints the config file location path
+    #[command(about = "Show the config file location")]
+    Config,
 }
 
 fn main() -> anyhow::Result<()> {
@@ -94,6 +98,9 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Shell { path, env } => {
             handle_shell_command(path.as_ref(), env)?;
+        }
+        Commands::Config => {
+            handle_config_command()?;
         }
     }
 
