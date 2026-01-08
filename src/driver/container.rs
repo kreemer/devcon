@@ -121,6 +121,7 @@ impl ContainerDriver {
             process_features(&devcontainer_workspace.devcontainer.features, &directory)?;
         let mut feature_install = String::new();
 
+        let mut i = 0;
         for (feature, feature_path) in processed_features {
             let feature_name = match &feature.source {
                 crate::devcontainer::FeatureSource::Registry {
@@ -131,6 +132,11 @@ impl ContainerDriver {
                     &path.to_string_lossy().to_string()
                 }
             };
+            if i == 0 {
+                feature_install.push_str(&format!("FROM {} AS feature_0 \n", "base"));
+            } else {
+                feature_install.push_str(&format!("FROM feature_{} AS feature_{} \n", i - 1, i));
+            }
             feature_install.push_str(&format!(
                 "COPY {}/* /tmp/features/{}/ \n",
                 feature_path, feature_name
@@ -139,7 +145,11 @@ impl ContainerDriver {
                 "RUN chmod +x /tmp/features/{}/install.sh && /tmp/features/{}/install.sh \n",
                 feature_name, feature_name
             ));
+
+            i += 1;
         }
+
+        feature_install.push_str(&format!("FROM feature_{} AS feature_last \n", i - 1));
 
         // Add environment variables
         let mut env_setup = String::new();
@@ -169,12 +179,15 @@ impl ContainerDriver {
 
         let contents = format!(
             r#"
-FROM {}
+FROM {} AS base
 RUN mkdir /tmp/features
 {}{}
+
+FROM feature_last AS dotfiles
 USER {}
 {}
 
+FROM dotfiles
 WORKDIR /workspaces/{}
 CMD ["sleep", "infinity"]
     "#,
