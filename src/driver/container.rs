@@ -59,7 +59,6 @@ use std::{
 };
 
 use anyhow::bail;
-use serde::de;
 use tempfile::TempDir;
 
 use crate::{devcontainer::Devcontainer, driver::process_features};
@@ -364,7 +363,7 @@ CMD ["sleep", "infinity"]
         }
 
         cmd.arg(container_id.unwrap())
-            .arg(&default_shell.unwrap_or("zsh".to_string()))
+            .arg(default_shell.unwrap_or("zsh".to_string()))
             .status()?;
 
         Ok(())

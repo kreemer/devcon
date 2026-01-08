@@ -99,11 +99,7 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
     devcontainer.merge_additional_features(&config.additional_features)?;
 
     let driver = ContainerDriver::new(&devcontainer);
-    driver.build(
-        canonical_path,
-        config.dotfiles_repository.as_deref(),
-        &vec![],
-    )?;
+    driver.build(canonical_path, config.dotfiles_repository.as_deref(), &[])?;
 
     Ok(())
 }
@@ -143,7 +139,7 @@ pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
     let devcontainer = Devcontainer::try_from(path.clone())?;
     let canonical_path = std::fs::canonicalize(&path)?;
     let driver = ContainerDriver::new(&devcontainer);
-    driver.start(canonical_path, &vec![])?;
+    driver.start(canonical_path, &[])?;
 
     Ok(())
 }
