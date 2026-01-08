@@ -84,7 +84,10 @@ enum Commands {
     },
     /// Prints the config file location path
     #[command(about = "Show the config file location")]
-    Config,
+    Config {
+        #[arg(help = "Create the config file if it does not exist", long, short)]
+        create_if_missing: bool,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -102,8 +105,8 @@ fn main() -> anyhow::Result<()> {
                 env,
             )?;
         }
-        Commands::Config => {
-            handle_config_command()?;
+        Commands::Config { create_if_missing } => {
+            handle_config_command(*create_if_missing)?;
         }
     }
 

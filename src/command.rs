@@ -33,7 +33,11 @@
 //! - Executing the requested operation
 //! - Handling errors and returning results
 
-use std::path::PathBuf;
+use std::io::Write;
+use std::{
+    fs::{self, File},
+    path::PathBuf,
+};
 
 use crate::{config::Config, devcontainer::Devcontainer, driver::container::ContainerDriver};
 
@@ -53,8 +57,36 @@ use crate::{config::Config, devcontainer::Devcontainer, driver::container::Conta
 /// handle_config_command()?;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub fn handle_config_command() -> anyhow::Result<()> {
+pub fn handle_config_command(create_if_missing: bool) -> anyhow::Result<()> {
     let config_path = Config::get_config_path()?;
+
+    if !config_path.exists() && create_if_missing {
+        let config_dir = config_path
+            .parent()
+            .ok_or_else(|| anyhow::anyhow!("Failed to get config directory"))?;
+        fs::create_dir_all(config_dir)?;
+        let mut file = File::create(&config_path)?;
+
+        let documentation = r#"# DevCon Configuration File
+# This file contains user-specific settings for DevCon.
+# Modify the values below to customize your DevCon experience.
+#
+# dotfiles_repository: https://github.com/user/dotfiles.git
+# additional_features:
+#   ghcr.io/someowner/somerepo/somefeature:latest:
+#     option1: value1
+#     option2: value2
+# env_variables:
+#   - VAR1=value1
+#   - LOCALENV
+"#;
+
+        file.write_all(documentation.as_bytes())?;
+
+        println!("Config file created at {}", config_path.display());
+        return Ok(());
+    }
+
     println!("{}", config_path.display());
     Ok(())
 }
