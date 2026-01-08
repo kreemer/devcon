@@ -26,6 +26,7 @@ impl<'de> Deserialize<'de> for Devcontainer {
             #[serde(default)]
             #[serde(deserialize_with = "deserialize_features_map")]
             features: Vec<(String, serde_json::Value)>,
+            #[serde(rename = "remoteUser")]
             remote_user: Option<String>,
         }
 
@@ -365,6 +366,297 @@ mod tests {
                 assert_eq!(PathBuf::from("./devfeatures/myfeature"), *path);
             }
             _ => assert!(false, "Feature source should be Local"),
+        }
+    }
+
+    #[test]
+    fn test_mixed_features() {
+        let feature_json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "features": {
+               "ghcr.io/devcontainers/features/github-cli:1": {},
+               "./local-feature": {},
+               "ghcr.io/devcontainers/features/node:2": {}
+            }
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(feature_json).unwrap();
+
+        assert_eq!(devcontainer.features.len(), 3);
+
+        // First should be registry
+        match &devcontainer.features[0].source {
+            FeatureSource::Registry { registry, .. } => {
+                assert_eq!("github-cli", registry.name);
+            }
+            _ => panic!("Expected Registry feature"),
+        }
+
+        // Second should be local
+        match &devcontainer.features[1].source {
+            FeatureSource::Local { path } => {
+                assert_eq!(PathBuf::from("./local-feature"), *path);
+            }
+            _ => panic!("Expected Local feature"),
+        }
+
+        // Third should be registry
+        match &devcontainer.features[2].source {
+            FeatureSource::Registry { registry, .. } => {
+                assert_eq!("node", registry.name);
+            }
+            _ => panic!("Expected Registry feature"),
+        }
+    }
+
+    #[test]
+    fn test_feature_with_options() {
+        let feature_json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "features": {
+               "ghcr.io/devcontainers/features/node:2": {
+                   "version": "18",
+                   "installYarnUsingApt": true
+               }
+            }
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(feature_json).unwrap();
+
+        assert_eq!(devcontainer.features.len(), 1);
+        let feature = &devcontainer.features[0];
+
+        assert!(feature.options.is_object());
+        assert_eq!(
+            feature.options.get("version").and_then(|v| v.as_str()),
+            Some("18")
+        );
+        assert_eq!(
+            feature
+                .options
+                .get("installYarnUsingApt")
+                .and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn test_feature_without_version() {
+        let feature_json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "features": {
+               "ghcr.io/devcontainers/features/docker-in-docker": {}
+            }
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(feature_json).unwrap();
+
+        let feature = &devcontainer.features[0];
+        match &feature.source {
+            FeatureSource::Registry { registry, .. } => {
+                assert_eq!("latest", registry.version);
+            }
+            _ => panic!("Expected Registry feature"),
+        }
+    }
+
+    #[test]
+    fn test_empty_features() {
+        let feature_json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "features": {}
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(feature_json).unwrap();
+
+        assert_eq!(devcontainer.features.len(), 0);
+    }
+
+    #[test]
+    fn test_no_features_field() {
+        let feature_json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04"
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(feature_json).unwrap();
+
+        assert_eq!(devcontainer.features.len(), 0);
+    }
+
+    #[test]
+    fn test_missing_name_field() {
+        let feature_json = r#"
+        {
+            "image": "ubuntu:20.04",
+            "features": {}
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(feature_json).unwrap();
+
+        assert_eq!(devcontainer.name, None);
+        assert_eq!(devcontainer.get_computed_name(), "default");
+    }
+
+    #[test]
+    fn test_with_remote_user() {
+        let feature_json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "remoteUser": "vscode"
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(feature_json).unwrap();
+
+        assert_eq!(devcontainer.remote_user.as_deref(), Some("vscode"));
+    }
+
+    #[test]
+    fn test_get_computed_name_with_name() {
+        let feature_json = r#"
+        {
+            "name": "my-project",
+            "image": "ubuntu:20.04"
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(feature_json).unwrap();
+
+        assert_eq!(devcontainer.get_computed_name(), "my-project");
+    }
+
+    #[test]
+    fn test_invalid_feature_url_missing_owner() {
+        let feature_json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "features": {
+               "ghcr.io/invalid:1": {}
+            }
+        }
+        "#;
+
+        let result: Result<Devcontainer, _> = serde_json::from_str(feature_json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_invalid_feature_url_missing_name() {
+        let feature_json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "features": {
+               "ghcr.io/devcontainers/features": {}
+            }
+        }
+        "#;
+
+        let result: Result<Devcontainer, _> = serde_json::from_str(feature_json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_missing_image_field() {
+        let feature_json = r#"
+        {
+            "name": "test",
+            "features": {}
+        }
+        "#;
+
+        let result: Result<Devcontainer, _> = serde_json::from_str(feature_json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_try_from_string() {
+        let content = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04"
+        }
+        "#;
+
+        let devcontainer = Devcontainer::try_from(content.to_string()).unwrap();
+        assert_eq!(devcontainer.name.as_deref(), Some("test"));
+        assert_eq!(devcontainer.image, "ubuntu:20.04");
+    }
+
+    #[test]
+    fn test_complex_feature_parsing() {
+        let feature_json = r#"
+        {
+            "name": "complex-test",
+            "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+            "features": {
+                "ghcr.io/devcontainers/features/common-utils:2": {
+                    "installZsh": true,
+                    "installOhMyZsh": true,
+                    "username": "vscode"
+                },
+                "ghcr.io/devcontainers/features/git:1": {
+                    "version": "latest",
+                    "ppa": true
+                },
+                "./local-features/custom-tool": {
+                    "enabled": true
+                }
+            },
+            "remoteUser": "vscode"
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(feature_json).unwrap();
+
+        assert_eq!(devcontainer.name.as_deref(), Some("complex-test"));
+        assert_eq!(
+            devcontainer.image,
+            "mcr.microsoft.com/devcontainers/base:ubuntu"
+        );
+        assert_eq!(devcontainer.features.len(), 3);
+        assert_eq!(devcontainer.remote_user.as_deref(), Some("vscode"));
+
+        // Verify first feature
+        match &devcontainer.features[0].source {
+            FeatureSource::Registry { registry, .. } => {
+                assert_eq!("common-utils", registry.name);
+                assert_eq!("2", registry.version);
+            }
+            _ => panic!("Expected Registry feature"),
+        }
+
+        // Verify second feature
+        match &devcontainer.features[1].source {
+            FeatureSource::Registry { registry, .. } => {
+                assert_eq!("git", registry.name);
+                assert_eq!("1", registry.version);
+            }
+            _ => panic!("Expected Registry feature"),
+        }
+
+        // Verify third feature is local
+        match &devcontainer.features[2].source {
+            FeatureSource::Local { .. } => {}
+            _ => panic!("Expected Local feature"),
         }
     }
 }
