@@ -1,3 +1,54 @@
+// MIT License
+//
+// Copyright (c) 2025 DevCon Contributors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+//! # Devcontainer Configuration
+//!
+//! This module provides types and functionality for parsing and working with
+//! devcontainer.json configuration files.
+//!
+//! ## Overview
+//!
+//! The devcontainer specification defines how to configure development containers
+//! with specific tools, runtime environments, and features. This module implements
+//! parsing and deserialization of these configurations.
+//!
+//! ## Main Types
+//!
+//! - [`Devcontainer`] - The main configuration structure
+//! - [`Feature`] - Represents a devcontainer feature with its source and options
+//! - [`FeatureSource`] - Defines where a feature comes from (registry or local)
+//! - [`FeatureRegistry`] - Registry-specific feature metadata
+//!
+//! ## Examples
+//!
+//! ```no_run
+//! use std::path::PathBuf;
+//! use devcon::devcontainer::Devcontainer;
+//!
+//! let config = Devcontainer::try_from(PathBuf::from("/path/to/project"))?;
+//! println!("Container name: {}", config.get_computed_name());
+//! # Ok::<(), anyhow::Error>(())
+//! ```
+
 use std::fs;
 use std::path::PathBuf;
 
@@ -5,6 +56,17 @@ use anyhow::bail;
 use serde::Deserialize;
 use serde::de;
 
+/// Represents a devcontainer.json configuration.
+///
+/// This structure contains all the necessary information to build and run
+/// a development container, including the base image, features, and user settings.
+///
+/// # Fields
+///
+/// * `name` - Optional name for the container (defaults to directory name if not set)
+/// * `image` - The Docker base image to use
+/// * `features` - List of features to install in the container
+/// * `remote_user` - The user to use when connecting to the container
 #[derive(Debug)]
 pub struct Devcontainer {
     pub name: Option<String>,

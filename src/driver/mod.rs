@@ -1,3 +1,47 @@
+// MIT License
+//
+// Copyright (c) 2025 DevCon Contributors
+//
+// Permission is hereby granted, free of charge, to any person obtaining a copy
+// of this software and associated documentation files (the "Software"), to deal
+// in the Software without restriction, including without limitation the rights
+// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+// copies of the Software, and to permit persons to whom the Software is
+// furnished to do so, subject to the following conditions:
+//
+// The above copyright notice and this permission notice shall be included in all
+// copies or substantial portions of the Software.
+//
+// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+// SOFTWARE.
+
+//! # Container Drivers
+//!
+//! This module provides the core functionality for building and managing
+//! development containers.
+//!
+//! ## Overview
+//!
+//! The driver module handles:
+//! - Processing and downloading devcontainer features from registries
+//! - Building container images with Dockerfiles
+//! - Starting and managing container instances
+//!
+//! ## Submodules
+//!
+//! - [`container`] - Container lifecycle management (build, start, stop)
+//!
+//! ## Feature Processing
+//!
+//! Features can be sourced from:
+//! - **Registry** - Downloaded from OCI-compliant registries like ghcr.io
+//! - **Local** - Loaded from the local filesystem (not yet implemented)
+
 use std::fs::{self, File};
 
 use anyhow::bail;
@@ -7,6 +51,26 @@ use crate::devcontainer::Feature;
 
 pub mod container;
 
+/// Processes a list of features, downloading and extracting them as needed.
+///
+/// This function iterates through all features and processes each one,
+/// returning a list of tuples containing the feature reference and its
+/// relative path in the temporary directory.
+///
+/// # Arguments
+///
+/// * `features` - Slice of features to process
+/// * `directory` - Temporary directory where features will be stored
+///
+/// # Returns
+///
+/// A vector of tuples containing:
+/// - Reference to the feature
+/// - Relative path to the extracted feature files
+///
+/// # Errors
+///
+/// Returns an error if any feature fails to download or extract.
 fn process_features<'a>(
     features: &'a [Feature],
     directory: &'a TempDir,
