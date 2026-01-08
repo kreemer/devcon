@@ -25,8 +25,6 @@ anyhow = "1.0.100"
 clap = { version = "4.5.41", features = ["derive"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.148"
-socket2 = "0.6.1"
-tokio = { version = "1.49.0", features = ["full"] }
 tempfile = "3.8"
 oci-spec = "0.8.4"
 reqwest = { version = "0.13.1", features = ["blocking", "json"] }

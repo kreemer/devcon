@@ -23,14 +23,11 @@
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 
-use crate::command::{handle_server_command, handle_shell_command, handle_start_command};
+use crate::command::*;
 
 mod command;
 mod devcontainer;
 mod driver;
-mod server;
-
-const SOCKET_PATH: &str = "/tmp/devcon.sock";
 
 #[derive(Parser)]
 #[command(
@@ -46,6 +43,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Builds a development container for the specified path
+    #[command(about = "Create a development container")]
+    Build {
+        /// Path to the project directory containing .devcontainer configuration
+        #[arg(
+            help = "Path to the project directory. If not provided, uses current directory.",
+            value_name = "PATH"
+        )]
+        path: Option<PathBuf>,
+    },
+
     /// Starts a development container for the specified path
     #[command(about = "Create a development container")]
     Start {
@@ -73,25 +81,19 @@ enum Commands {
         )]
         env: Vec<String>,
     },
-
-    #[command(about = "Starts the devcon server which handles the generation")]
-    Server {
-        #[arg(short, long, help = "Run the server in the background")]
-        daemon: bool,
-    },
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match &cli.command {
+        Some(Commands::Build { path }) => {
+            handle_build_command(path.clone().unwrap_or(PathBuf::from(".").to_path_buf()))?;
+        }
         Some(Commands::Start { path }) => {
             handle_start_command(path.clone().unwrap_or(PathBuf::from(".").to_path_buf()))?;
         }
         Some(Commands::Shell { path, env }) => {
             handle_shell_command(path.as_ref(), env)?;
-        }
-        Some(Commands::Server { daemon }) => {
-            handle_server_command(*daemon)?;
         }
         None => {
             todo!("To be implemented");
