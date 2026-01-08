@@ -97,7 +97,10 @@ fn main() -> anyhow::Result<()> {
             handle_start_command(path.clone().unwrap_or(PathBuf::from(".").to_path_buf()))?;
         }
         Commands::Shell { path, env } => {
-            handle_shell_command(path.as_ref(), env)?;
+            handle_shell_command(
+                path.clone().unwrap_or(PathBuf::from(".").to_path_buf()),
+                env,
+            )?;
         }
         Commands::Config => {
             handle_config_command()?;

@@ -68,6 +68,12 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dotfiles_repository: Option<String>,
 
+    /// Default shell
+    ///
+    /// If set, the shell command will use this shell to exec into the container
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub default_shell: Option<String>,
+
     /// Additional devcontainer features to include in all containers.
     ///
     /// These features are merged with features defined in devcontainer.json.
@@ -78,7 +84,8 @@ pub struct Config {
 
     /// Environment variables to pass to containers.
     ///
-    /// Each string should be in the format "KEY=value".
+    /// If the string has the format KEY=value, it will be set as an environment variable in the container
+    /// If its only a string without "=" it will be passed through as is from the host container.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_variables: Vec<String>,
 }
