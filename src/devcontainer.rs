@@ -160,18 +160,16 @@ impl Devcontainer {
         &mut self,
         additional_features: &std::collections::HashMap<String, serde_json::Value>,
     ) -> anyhow::Result<()> {
-        use std::collections::HashSet;
-
         // Get set of existing feature URLs
-        let existing_urls: HashSet<String> = self
+        let existing_urls: Vec<String> = self
             .features
             .iter()
-            .filter_map(|f| match &f.source {
-                FeatureSource::Registry { registry, .. } => Some(format!(
+            .map(|f| match &f.source {
+                FeatureSource::Registry { registry, .. } => format!(
                     "ghcr.io/{}/{}/{}:{}",
                     registry.owner, registry.repository, registry.name, registry.version
-                )),
-                FeatureSource::Local { path } => Some(path.to_string_lossy().to_string()),
+                ),
+                FeatureSource::Local { path } => path.to_string_lossy().to_string(),
             })
             .collect();
 
@@ -360,7 +358,7 @@ mod tests {
                 assert_eq!("github-cli", registry.name);
                 assert_eq!("1", registry.version);
             }
-            _ => assert!(false, "Feature source should be Registry"),
+            _ => unreachable!("Feature source should be Local"),
         }
     }
 
@@ -394,7 +392,7 @@ mod tests {
                 assert_eq!("github-cli", registry.name);
                 assert_eq!("1", registry.version);
             }
-            _ => assert!(false, "Feature source should be Registry"),
+            _ => unreachable!("Feature source should be Local"),
         }
     }
 
@@ -429,7 +427,7 @@ mod tests {
                 assert_eq!("github-cli", registry.name);
                 assert_eq!("1", registry.version);
             }
-            _ => assert!(false, "Feature source should be Registry"),
+            _ => unreachable!("Feature source should be Local"),
         }
         let feature = &devcontainer.features[1];
         match &feature.source {
@@ -445,7 +443,7 @@ mod tests {
                 assert_eq!("node", registry.name);
                 assert_eq!("2", registry.version);
             }
-            _ => assert!(false, "Feature source should be Registry"),
+            _ => unreachable!("Feature source should be Local"),
         }
     }
 
@@ -470,7 +468,7 @@ mod tests {
             FeatureSource::Local { path } => {
                 assert_eq!(PathBuf::from("./devfeatures/myfeature"), *path);
             }
-            _ => assert!(false, "Feature source should be Local"),
+            _ => unreachable!("Feature source should be Local"),
         }
     }
 

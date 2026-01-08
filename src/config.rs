@@ -153,6 +153,7 @@ impl Config {
     /// config.save()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
+    #[allow(dead_code)]
     pub fn save(&self) -> Result<()> {
         let config_path = Self::get_config_path()?;
 
@@ -198,6 +199,7 @@ impl Config {
     /// # Returns
     ///
     /// A HashMap containing all features with their options.
+    #[allow(dead_code)]
     pub fn merge_features(
         &self,
         devcontainer_features: &[(String, serde_json::Value)],
@@ -227,9 +229,11 @@ mod tests {
 
     #[test]
     fn test_config_serialization() {
-        let mut config = Config::default();
-        config.dotfiles_repository = Some("https://github.com/user/dotfiles".to_string());
-        config.env_variables = vec!["EDITOR=vim".to_string()];
+        let config = Config {
+            dotfiles_repository: Some("https://github.com/user/dotfiles".to_string()),
+            env_variables: vec!["EDITOR=vim".to_string()],
+            ..Default::default()
+        };
 
         let yaml = serde_yaml::to_string(&config).unwrap();
         assert!(yaml.contains("dotfilesRepository"));
