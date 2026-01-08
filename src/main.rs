@@ -38,7 +38,7 @@ mod driver;
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Option<Commands>,
+    command: Commands,
 }
 
 #[derive(Subcommand)]
@@ -86,17 +86,14 @@ enum Commands {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match &cli.command {
-        Some(Commands::Build { path }) => {
+        Commands::Build { path } => {
             handle_build_command(path.clone().unwrap_or(PathBuf::from(".").to_path_buf()))?;
         }
-        Some(Commands::Start { path }) => {
+        Commands::Start { path } => {
             handle_start_command(path.clone().unwrap_or(PathBuf::from(".").to_path_buf()))?;
         }
-        Some(Commands::Shell { path, env }) => {
+        Commands::Shell { path, env } => {
             handle_shell_command(path.as_ref(), env)?;
-        }
-        None => {
-            todo!("To be implemented");
         }
     }
 
