@@ -131,7 +131,12 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
     devcontainer.merge_additional_features(&config.additional_features)?;
 
     let driver = ContainerDriver::new(&devcontainer);
-    driver.build(canonical_path, config.dotfiles_repository.as_deref(), &[])?;
+    let result = driver.build(canonical_path, config.dotfiles_repository.as_deref(), &[]);
+
+    if result.is_err() {
+        println!("Error: {:?}", result.err());
+        anyhow::bail!("Failed to build the development container.");
+    }
 
     Ok(())
 }
