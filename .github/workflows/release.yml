@@ -39,12 +39,9 @@ jobs:
     strategy:
       matrix:
         include:
-          - os: ubuntu-latest
-            artifact_name: devcon
-            asset_name: devcon-linux-amd64
           - os: macos-latest
             artifact_name: devcon
-            asset_name: devcon-macos-amd64
+            asset_name: devcon-macos-arm64
 
     steps:
       - name: Checkout repository
@@ -162,7 +159,7 @@ jobs:
               repo,
               release_id: context.payload.release.id,
             });
-            
+
             const assets = release.data.assets;
             for (const asset of assets) {
               const response = await github.rest.repos.getReleaseAsset({
