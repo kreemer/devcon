@@ -39,7 +39,9 @@ use std::{
     path::PathBuf,
 };
 
-use crate::{config::Config, devcontainer::Devcontainer, driver::container::ContainerDriver};
+use crate::{
+    config::Config, devcontainer::DevcontainerWorkspace, driver::container::ContainerDriver,
+};
 
 /// Handles the config command to display the config file path.
 ///
@@ -123,15 +125,21 @@ pub fn handle_config_command(create_if_missing: bool) -> anyhow::Result<()> {
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
-    let canonical_path = std::fs::canonicalize(&path)?;
     let config = Config::load()?;
-    let mut devcontainer = Devcontainer::try_from(path)?;
+
+    let mut devcontainer_workspace = DevcontainerWorkspace::try_from(path)?;
 
     // Merge additional features from config
-    devcontainer.merge_additional_features(&config.additional_features)?;
+    devcontainer_workspace
+        .devcontainer
+        .merge_additional_features(&config.additional_features)?;
 
-    let driver = ContainerDriver::new(&devcontainer);
-    let result = driver.build(canonical_path, config.dotfiles_repository.as_deref(), &[]);
+    let driver = ContainerDriver {};
+    let result = driver.build(
+        devcontainer_workspace,
+        config.dotfiles_repository.as_deref(),
+        &[],
+    );
 
     if result.is_err() {
         println!("Error: {:?}", result.err());
@@ -173,10 +181,9 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
-    let devcontainer = Devcontainer::try_from(path.clone())?;
-    let canonical_path = std::fs::canonicalize(&path)?;
-    let driver = ContainerDriver::new(&devcontainer);
-    driver.start(canonical_path, &[])?;
+    let devcontainer_workspace = DevcontainerWorkspace::try_from(path.clone())?;
+    let driver = ContainerDriver {};
+    driver.start(devcontainer_workspace, &[])?;
 
     Ok(())
 }
@@ -193,9 +200,12 @@ pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
 /// Currently always returns `Ok(())` as it's not implemented.
 pub fn handle_shell_command(path: PathBuf, _env: &[String]) -> anyhow::Result<()> {
     let config = Config::load()?;
-    let devcontainer = Devcontainer::try_from(path.clone())?;
-    let canonical_path = std::fs::canonicalize(&path)?;
-    let driver = ContainerDriver::new(&devcontainer);
-    driver.shell(canonical_path, &config.env_variables, config.default_shell)?;
+    let devcontainer_workspace = DevcontainerWorkspace::try_from(path.clone())?;
+    let driver = ContainerDriver {};
+    driver.shell(
+        devcontainer_workspace,
+        &config.env_variables,
+        config.default_shell,
+    )?;
     Ok(())
 }

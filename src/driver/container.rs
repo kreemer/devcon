@@ -54,14 +54,13 @@
 
 use std::{
     fs::{self, File},
-    path::PathBuf,
     process::Command,
 };
 
 use anyhow::bail;
 use tempfile::TempDir;
 
-use crate::{devcontainer::Devcontainer, driver::process_features};
+use crate::{devcontainer::DevcontainerWorkspace, driver::process_features};
 
 /// Driver for managing container build and runtime operations.
 ///
@@ -72,33 +71,9 @@ use crate::{devcontainer::Devcontainer, driver::process_features};
 ///
 /// The driver holds a reference to a `Devcontainer` configuration,
 /// so it must not outlive the configuration.
-pub struct ContainerDriver<'a> {
-    devcontainer: &'a Devcontainer,
-}
+pub struct ContainerDriver {}
 
-impl<'a> ContainerDriver<'a> {
-    /// Creates a new `ContainerDriver` instance.
-    ///
-    /// # Arguments
-    ///
-    /// * `devcontainer` - Reference to the devcontainer configuration
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use devcon::devcontainer::Devcontainer;
-    /// # use devcon::driver::container::ContainerDriver;
-    /// # use std::path::PathBuf;
-    /// # fn example() -> anyhow::Result<()> {
-    /// let config = Devcontainer::try_from(PathBuf::from("/project"))?;
-    /// let driver = ContainerDriver::new(&config);
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn new(devcontainer: &'a Devcontainer) -> Self {
-        Self { devcontainer }
-    }
-
+impl ContainerDriver {
     /// Builds a container image from the devcontainer configuration.
     ///
     /// This method:
@@ -136,13 +111,14 @@ impl<'a> ContainerDriver<'a> {
     /// ```
     pub fn build(
         &self,
-        path: PathBuf,
+        devcontainer_workspace: DevcontainerWorkspace,
         dotfiles_repo: Option<&str>,
         env_variables: &[String],
     ) -> anyhow::Result<()> {
         let directory = TempDir::new()?;
 
-        let processed_features = process_features(&self.devcontainer.features, &directory)?;
+        let processed_features =
+            process_features(&devcontainer_workspace.devcontainer.features, &directory)?;
         let mut feature_install = String::new();
 
         for (feature, feature_path) in processed_features {
@@ -172,7 +148,11 @@ impl<'a> ContainerDriver<'a> {
         }
 
         // Determine remote user
-        let remote_user = self.devcontainer.remote_user.as_deref().unwrap_or("root");
+        let remote_user = devcontainer_workspace
+            .devcontainer
+            .remote_user
+            .as_deref()
+            .unwrap_or("root");
 
         // Add dotfiles setup if repository is provided
         let dotfiles_setup = if let Some(repo) = dotfiles_repo {
@@ -198,12 +178,16 @@ USER {}
 WORKDIR /workspaces/{}
 CMD ["sleep", "infinity"]
     "#,
-            self.devcontainer.image,
+            devcontainer_workspace.devcontainer.image,
             feature_install,
             env_setup,
             remote_user,
             dotfiles_setup,
-            path.file_name().unwrap().to_string_lossy()
+            devcontainer_workspace
+                .path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
         );
 
         fs::write(&dockerfile, contents)?;
@@ -213,7 +197,7 @@ CMD ["sleep", "infinity"]
             .arg("-f")
             .arg(&dockerfile)
             .arg("-t")
-            .arg(self.get_image_tag())
+            .arg(self.get_image_tag(&devcontainer_workspace))
             .arg(directory.path())
             .status();
 
@@ -263,7 +247,11 @@ CMD ["sleep", "infinity"]
     /// # Ok(())
     /// # }
     /// ```
-    pub fn start(&self, path: PathBuf, env_variables: &[String]) -> anyhow::Result<()> {
+    pub fn start(
+        &self,
+        devcontainer_workspace: DevcontainerWorkspace,
+        env_variables: &[String],
+    ) -> anyhow::Result<()> {
         let mut cmd = Command::new("container");
         cmd.arg("run")
             .arg("--rm")
@@ -271,13 +259,21 @@ CMD ["sleep", "infinity"]
             .arg("-v")
             .arg(format!(
                 "{}:/workspaces/{}",
-                path.to_string_lossy(),
-                path.file_name().unwrap().to_string_lossy()
+                devcontainer_workspace.path.to_string_lossy(),
+                devcontainer_workspace
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
             ))
             .arg("-l")
             .arg(format!(
                 "devcon={}",
-                path.file_name().unwrap().to_string_lossy()
+                devcontainer_workspace
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
             ));
 
         // Add environment variables
@@ -291,7 +287,7 @@ CMD ["sleep", "infinity"]
             }
         }
 
-        cmd.arg(self.get_image_tag());
+        cmd.arg(self.get_image_tag(&devcontainer_workspace));
 
         let result = cmd.status();
 
@@ -339,11 +335,15 @@ CMD ["sleep", "infinity"]
     /// ```
     pub fn shell(
         &self,
-        path: PathBuf,
+        devcontainer_workspace: DevcontainerWorkspace,
         env_variables: &[String],
         default_shell: Option<String>,
     ) -> anyhow::Result<()> {
-        let name = path.file_name().unwrap().to_string_lossy();
+        let name = devcontainer_workspace
+            .path
+            .file_name()
+            .unwrap()
+            .to_string_lossy();
         let containers = ContainerDriver::list()?;
 
         let container_id = containers
@@ -351,8 +351,6 @@ CMD ["sleep", "infinity"]
             .find(|(container_name, _)| container_name == &name)
             .map(|(_, id)| id.clone());
 
-        println!("Connecting to container for project: {}", name);
-        println!("ContainerID: {:?}", container_id);
         if container_id.is_none() {
             bail!("No running container found for project {}", name);
         }
@@ -418,7 +416,7 @@ CMD ["sleep", "infinity"]
     /// # Returns
     ///
     /// A string containing the full image tag.
-    fn get_image_tag(&self) -> String {
-        format!("devcon-{}", self.devcontainer.get_computed_name())
+    fn get_image_tag(&self, devcontainer_workspace: &DevcontainerWorkspace) -> String {
+        format!("devcon-{}", devcontainer_workspace.get_sanitized_name())
     }
 }

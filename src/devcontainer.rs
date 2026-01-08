@@ -45,7 +45,7 @@
 //! use devcon::devcontainer::Devcontainer;
 //!
 //! let config = Devcontainer::try_from(PathBuf::from("/path/to/project"))?;
-//! println!("Container name: {}", config.get_computed_name());
+//! println!("Container name: {}", config.name.as_deref().unwrap_or("default"));
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
@@ -55,6 +55,67 @@ use std::path::PathBuf;
 use anyhow::bail;
 use serde::Deserialize;
 use serde::de;
+
+/// Represents a workspace containing a devcontainer configuration.
+///
+/// This structure holds the path to the project directory and
+/// the parsed devcontainer configuration.
+///
+/// # Fields
+///
+/// * `path` - The path to the project directory
+/// * `devcontainer` - The parsed devcontainer configuration
+///
+/// # Examples
+///
+/// no_run
+/// use std::path::PathBuf;
+/// use devcon::devcontainer::{Devcontainer, DevcontainerWorkspace};
+/// let workspace = DevcontainerWorkspace {
+///   path: PathBuf::from("/path/to/project"),
+///   devcontainer: Devcontainer::try_from(PathBuf::from("/path/to/project"))?,
+/// };
+pub struct DevcontainerWorkspace {
+    pub path: PathBuf,
+    pub devcontainer: Devcontainer,
+}
+
+impl TryFrom<PathBuf> for DevcontainerWorkspace {
+    type Error = anyhow::Error;
+
+    fn try_from(path: PathBuf) -> std::result::Result<Self, Self::Error> {
+        let canonical_path = fs::canonicalize(&path)?;
+        let devcontainer = Devcontainer::try_from(canonical_path.clone())?;
+
+        Ok(DevcontainerWorkspace {
+            path: canonical_path,
+            devcontainer,
+        })
+    }
+}
+
+impl DevcontainerWorkspace {
+    pub fn get_name(&self) -> String {
+        if let Some(name) = self.devcontainer.name.as_ref() {
+            return name.clone();
+        }
+
+        self.path
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("default"))
+            .to_string_lossy()
+            .to_string()
+    }
+
+    pub fn get_sanitized_name(&self) -> String {
+        let name = self.get_name();
+
+        name.to_ascii_lowercase().replace(
+            |c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_',
+            "-",
+        )
+    }
+}
 
 /// Represents a devcontainer.json configuration.
 ///
@@ -140,14 +201,6 @@ where
 }
 
 impl Devcontainer {
-    pub fn get_computed_name(&self) -> String {
-        if let Some(name) = &self.name {
-            return name.clone().to_ascii_lowercase().replace(" ", "-");
-        }
-
-        "default".to_string()
-    }
-
     /// Merges additional features from configuration into this devcontainer.
     ///
     /// This method adds features from the config that aren't already present
@@ -617,7 +670,6 @@ mod tests {
         let devcontainer: Devcontainer = serde_json::from_str(feature_json).unwrap();
 
         assert_eq!(devcontainer.name, None);
-        assert_eq!(devcontainer.get_computed_name(), "default");
     }
 
     #[test]
@@ -646,7 +698,7 @@ mod tests {
 
         let devcontainer: Devcontainer = serde_json::from_str(feature_json).unwrap();
 
-        assert_eq!(devcontainer.get_computed_name(), "my-project");
+        assert_eq!(devcontainer.name, Some("my-project".to_string()));
     }
 
     #[test]
