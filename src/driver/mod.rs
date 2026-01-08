@@ -186,3 +186,30 @@ fn download_feature<'a>(
 
     Ok(relative_path)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_process_feature_installation() {
+        let feature = Feature {
+            source: crate::devcontainer::FeatureSource::Registry {
+                registry_type: crate::devcontainer::FeatureRegistryType::Ghcr,
+                registry: crate::devcontainer::FeatureRegistry {
+                    owner: "shyim".to_string(),
+                    repository: "devcontainers-features".to_string(),
+                    name: "php".to_string(),
+                    version: "latest".to_string(),
+                },
+            },
+            options: serde_json::json!({}),
+        };
+        let temp_dir = TempDir::new().unwrap();
+        let result = process_feature(&feature, &temp_dir);
+        assert!(result.is_ok());
+        let relative_path = result.unwrap();
+        let expected_path = format!("php/extract");
+        assert_eq!(relative_path, expected_path);
+    }
+}
