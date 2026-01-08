@@ -141,7 +141,11 @@ where
 
 impl Devcontainer {
     pub fn get_computed_name(&self) -> String {
-        self.name.clone().unwrap_or_else(|| "default".to_string())
+        if let Some(name) = &self.name {
+            return name.clone().to_ascii_lowercase().replace(" ", "-");
+        }
+
+        "default".to_string()
     }
 
     /// Merges additional features from configuration into this devcontainer.

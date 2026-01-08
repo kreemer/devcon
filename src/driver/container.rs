@@ -221,6 +221,10 @@ CMD ["sleep", "infinity"]
             bail!("Failed to build container image")
         }
 
+        if result.unwrap().code() != Some(0) {
+            bail!("Container build command failed")
+        }
+
         directory.close()?;
         Ok(())
     }
@@ -295,6 +299,10 @@ CMD ["sleep", "infinity"]
             bail!("Failed to start container")
         }
 
+        if result.unwrap().code() != Some(0) {
+            bail!("Container start command failed")
+        }
+
         Ok(())
     }
 
@@ -362,10 +370,14 @@ CMD ["sleep", "infinity"]
             }
         }
 
-        cmd.arg(container_id.unwrap())
+        let result = cmd
+            .arg(container_id.unwrap())
             .arg(default_shell.unwrap_or("zsh".to_string()))
             .status()?;
 
+        if result.code() != Some(0) {
+            bail!("Container exec command failed")
+        }
         Ok(())
     }
 
