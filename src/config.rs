@@ -50,6 +50,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
@@ -95,6 +96,21 @@ pub struct Config {
     /// If its only a string without "=" it will be passed through as is from the host container.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub env_variables: Vec<String>,
+
+    /// Container runtime to use.
+    ///
+    /// Valid values: "auto", "docker", "apple"
+    /// If set to "auto" (default), the runtime will be auto-detected.
+    #[serde(default = "default_runtime", skip_serializing_if = "is_default_runtime")]
+    pub runtime: String,
+}
+
+fn default_runtime() -> String {
+    "auto".to_string()
+}
+
+fn is_default_runtime(runtime: &str) -> bool {
+    runtime == "auto"
 }
 
 impl Config {
@@ -219,6 +235,44 @@ impl Config {
         }
 
         merged
+    }
+
+    /// Detects which container runtime is available.
+    ///
+    /// Checks for Docker and Apple's container CLI in order.
+    /// Returns "docker" if docker is available, "apple" if container is available,
+    /// or an error if neither is found.
+    pub fn detect_runtime() -> Result<String> {
+        // Check for docker
+        if Command::new("docker")
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+        {
+            return Ok("docker".to_string());
+        }
+
+        // Check for Apple container CLI
+        if Command::new("container")
+            .arg("--version")
+            .output()
+            .map(|output| output.status.success())
+            .unwrap_or(false)
+        {
+            return Ok("apple".to_string());
+        }
+
+        anyhow::bail!("No container runtime found. Please install Docker or Apple's container CLI.")
+    }
+
+    /// Gets the runtime to use, resolving "auto" to a specific runtime.
+    pub fn resolve_runtime(&self) -> Result<String> {
+        if self.runtime == "auto" {
+            Self::detect_runtime()
+        } else {
+            Ok(self.runtime.clone())
+        }
     }
 }
 

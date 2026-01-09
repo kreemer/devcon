@@ -52,29 +52,30 @@
 //! # }
 //! ```
 
-use std::{
-    fs::{self, File},
-    process::Command,
-};
+use std::fs::{self, File};
 
 use anyhow::bail;
 use minijinja::Environment;
 use tempfile::TempDir;
 
-use crate::{devcontainer::DevcontainerWorkspace, driver::process_features};
+use crate::{
+    devcontainer::DevcontainerWorkspace,
+    driver::{process_features, runtime::ContainerRuntime},
+};
 
 /// Driver for managing container build and runtime operations.
 ///
 /// This struct encapsulates the logic for building container images
 /// and starting container instances based on devcontainer configurations.
-///
-/// # Lifetime
-///
-/// The driver holds a reference to a `Devcontainer` configuration,
-/// so it must not outlive the configuration.
-pub struct ContainerDriver {}
+pub struct ContainerDriver {
+    runtime: Box<dyn ContainerRuntime>,
+}
 
 impl ContainerDriver {
+    /// Creates a new ContainerDriver with the specified runtime.
+    pub fn new(runtime: Box<dyn ContainerRuntime>) -> Self {
+        Self { runtime }
+    }
     /// Builds a container image from the devcontainer configuration.
     ///
     /// This method:
@@ -259,22 +260,11 @@ CMD ["sleep", "infinity"]
 
         fs::write(&dockerfile, contents)?;
 
-        let result = Command::new("container")
-            .arg("build")
-            .arg("-f")
-            .arg(&dockerfile)
-            .arg("-t")
-            .arg(self.get_image_tag(&devcontainer_workspace))
-            .arg(directory.path())
-            .status();
-
-        if result.is_err() {
-            bail!("Failed to build container image")
-        }
-
-        if result.unwrap().code() != Some(0) {
-            bail!("Container build command failed")
-        }
+        self.runtime.build(
+            &dockerfile,
+            directory.path(),
+            &self.get_image_tag(&devcontainer_workspace),
+        )?;
 
         directory.close()?;
         Ok(())
@@ -319,52 +309,43 @@ CMD ["sleep", "infinity"]
         devcontainer_workspace: DevcontainerWorkspace,
         env_variables: &[String],
     ) -> anyhow::Result<()> {
-        let mut cmd = Command::new("container");
-        cmd.arg("run")
-            .arg("--rm")
-            .arg("-d")
-            .arg("-v")
-            .arg(format!(
-                "{}:/workspaces/{}",
-                devcontainer_workspace.path.to_string_lossy(),
-                devcontainer_workspace
-                    .path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-            ))
-            .arg("-l")
-            .arg(format!(
-                "devcon={}",
-                devcontainer_workspace
-                    .path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-            ));
+        let volume_mount = format!(
+            "{}:/workspaces/{}",
+            devcontainer_workspace.path.to_string_lossy(),
+            devcontainer_workspace
+                .path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+        );
 
-        // Add environment variables
+        let label = format!(
+            "devcon={}",
+            devcontainer_workspace
+                .path
+                .file_name()
+                .unwrap()
+                .to_string_lossy()
+        );
+
+        // Process environment variables
+        let mut processed_env_vars = Vec::new();
         for env_var in env_variables {
             if env_var.contains("=") {
-                cmd.arg("-e").arg(env_var);
+                processed_env_vars.push(env_var.clone());
             } else {
                 // Read host env variable
                 let host_value = std::env::var(env_var).unwrap_or_default();
-                cmd.arg("-e").arg(format!("{}={}", env_var, host_value));
+                processed_env_vars.push(format!("{}={}", env_var, host_value));
             }
         }
 
-        cmd.arg(self.get_image_tag(&devcontainer_workspace));
-
-        let result = cmd.status();
-
-        if result.is_err() {
-            bail!("Failed to start container")
-        }
-
-        if result.unwrap().code() != Some(0) {
-            bail!("Container start command failed")
-        }
+        self.runtime.run(
+            &self.get_image_tag(&devcontainer_workspace),
+            &volume_mount,
+            &label,
+            &processed_env_vars,
+        )?;
 
         Ok(())
     }
@@ -411,7 +392,7 @@ CMD ["sleep", "infinity"]
             .file_name()
             .unwrap()
             .to_string_lossy();
-        let containers = ContainerDriver::list()?;
+        let containers = self.runtime.list()?;
 
         let container_id = containers
             .iter()
@@ -422,58 +403,27 @@ CMD ["sleep", "infinity"]
             bail!("No running container found for project {}", name);
         }
 
-        let mut cmd = Command::new("container");
-        cmd.arg("exec").arg("-it");
-
+        // Process environment variables
+        let mut processed_env_vars = Vec::new();
         for env_var in env_variables {
             if env_var.contains("=") {
-                cmd.arg("-e").arg(env_var);
+                processed_env_vars.push(env_var.clone());
             } else {
                 // Read host env variable
                 let host_value = std::env::var(env_var).unwrap_or_default();
-                cmd.arg("-e").arg(format!("{}={}", env_var, host_value));
+                processed_env_vars.push(format!("{}={}", env_var, host_value));
             }
         }
 
-        let result = cmd
-            .arg(container_id.unwrap())
-            .arg(default_shell.unwrap_or("zsh".to_string()))
-            .status()?;
+        self.runtime.exec(
+            &container_id.unwrap(),
+            &default_shell.unwrap_or("zsh".to_string()),
+            &processed_env_vars,
+        )?;
 
-        if result.code() != Some(0) {
-            bail!("Container exec command failed")
-        }
         Ok(())
     }
 
-    fn list() -> anyhow::Result<Vec<(String, String)>> {
-        let output = Command::new("container")
-            .arg("list")
-            .arg("--format")
-            .arg("json")
-            .output()?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-
-        let containers: Vec<serde_json::Value> = serde_json::from_str(&stdout)?;
-
-        let result: Vec<(String, String)> = containers
-            .iter()
-            .map(|container| {
-                let name = container["configuration"]["labels"]["devcon"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string();
-                let id = container["configuration"]["id"]
-                    .as_str()
-                    .unwrap_or_default()
-                    .to_string();
-                (name, id)
-            })
-            .collect();
-
-        Ok(result)
-    }
 
     /// Returns the Docker image tag for this container.
     ///

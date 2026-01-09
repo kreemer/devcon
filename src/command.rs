@@ -40,7 +40,12 @@ use std::{
 };
 
 use crate::{
-    config::Config, devcontainer::DevcontainerWorkspace, driver::container::ContainerDriver,
+    config::Config,
+    devcontainer::DevcontainerWorkspace,
+    driver::{
+        container::ContainerDriver,
+        runtime::{apple::AppleRuntime, docker::DockerRuntime},
+    },
 };
 
 /// Handles the config command to display the config file path.
@@ -136,7 +141,15 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
         .devcontainer
         .merge_additional_features(&config.additional_features)?;
 
-    let driver = ContainerDriver {};
+    // Create runtime based on config
+    let runtime_name = config.resolve_runtime()?;
+    let runtime: Box<dyn crate::driver::runtime::ContainerRuntime> = match runtime_name.as_str() {
+        "docker" => Box::new(DockerRuntime::new()),
+        "apple" => Box::new(AppleRuntime::new()),
+        _ => anyhow::bail!("Unknown runtime: {}", runtime_name),
+    };
+
+    let driver = ContainerDriver::new(runtime);
     let result = driver.build(
         devcontainer_workspace,
         config.dotfiles_repository.as_deref(),
@@ -184,8 +197,18 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
+    let config = Config::load()?;
     let devcontainer_workspace = DevcontainerWorkspace::try_from(path.clone())?;
-    let driver = ContainerDriver {};
+
+    // Create runtime based on config
+    let runtime_name = config.resolve_runtime()?;
+    let runtime: Box<dyn crate::driver::runtime::ContainerRuntime> = match runtime_name.as_str() {
+        "docker" => Box::new(DockerRuntime::new()),
+        "apple" => Box::new(AppleRuntime::new()),
+        _ => anyhow::bail!("Unknown runtime: {}", runtime_name),
+    };
+
+    let driver = ContainerDriver::new(runtime);
     driver.start(devcontainer_workspace, &[])?;
 
     Ok(())
@@ -204,7 +227,16 @@ pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
 pub fn handle_shell_command(path: PathBuf, _env: &[String]) -> anyhow::Result<()> {
     let config = Config::load()?;
     let devcontainer_workspace = DevcontainerWorkspace::try_from(path.clone())?;
-    let driver = ContainerDriver {};
+
+    // Create runtime based on config
+    let runtime_name = config.resolve_runtime()?;
+    let runtime: Box<dyn crate::driver::runtime::ContainerRuntime> = match runtime_name.as_str() {
+        "docker" => Box::new(DockerRuntime::new()),
+        "apple" => Box::new(AppleRuntime::new()),
+        _ => anyhow::bail!("Unknown runtime: {}", runtime_name),
+    };
+
+    let driver = ContainerDriver::new(runtime);
     driver.shell(
         devcontainer_workspace,
         &config.env_variables,
