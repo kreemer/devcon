@@ -15,10 +15,13 @@ A blazingly fast TUI application for managing and launching development containe
 
 ## ✨ Features
 
-- 🚀 **Quick Launch**: Instantly spin up development containers with the DevContainer CLI
-- 📝 **Recent Projects**: Keep track of your frequently used projects with an intuitive TUI
-- 🧩 **Additional Features**: Configure and manage additional devcontainer features
-- ⚡ **Lightning Fast**: Built with Rust for optimal performance
+- 🚀 **Quick Launch**: Instantly build, start, and shell into development containers
+- 🐳 **Multi-Runtime Support**: Works with Docker and Apple's native container runtime
+- 🔄 **Lifecycle Hooks**: Full support for devcontainer lifecycle commands (onCreate, postCreate, postStart, postAttach)
+- 🧩 **Feature Management**: Automatic download and installation of features from OCI registries (ghcr.io)
+- 🎨 **Dotfiles Integration**: Clone and setup your dotfiles repository automatically
+- ⚙️ **Configuration**: User-level config with XDG directory support for additional features and environment variables
+- ⚡ **Lightning Fast**: Built with Rust for optimal performance and reliability
 
 ## 🛠 Installation
 
