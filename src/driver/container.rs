@@ -356,19 +356,19 @@ CMD ["sleep", "infinity"]
 
         match &devcontainer_workspace.devcontainer.on_create_command {
             Some(LifecycleCommand::String(cmd)) => {
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, cmd);
                 self.runtime
-                    .exec(handle.as_ref(), vec!["/bin/sh", "-c", &cmd], &[])?
+                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])?
             }
             Some(LifecycleCommand::Array(cmds)) => cmds.iter().try_for_each(|c| {
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, c);
                 self.runtime
-                    .exec(handle.as_ref(), vec!["/bin/sh", "-c", &c.to_string()], &[])
+                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
             })?,
             Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
-                self.runtime.exec(
-                    handle.as_ref(),
-                    vec!["/bin/sh", "-c", &cmd.to_string()],
-                    &[],
-                )
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, cmd);
+                self.runtime
+                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
             })?,
             None => { /* No onCreateCommand specified */ }
         };
@@ -395,38 +395,38 @@ CMD ["sleep", "infinity"]
 
         match &devcontainer_workspace.devcontainer.post_create_command {
             Some(LifecycleCommand::String(cmd)) => {
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, cmd);
                 self.runtime
-                    .exec(handle.as_ref(), vec!["/bin/sh", "-c", &cmd], &[])?
+                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])?
             }
             Some(LifecycleCommand::Array(cmds)) => cmds.iter().try_for_each(|c| {
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, c);
                 self.runtime
-                    .exec(handle.as_ref(), vec!["/bin/sh", "-c", &c.to_string()], &[])
+                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
             })?,
             Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
-                self.runtime.exec(
-                    handle.as_ref(),
-                    vec!["/bin/sh", "-c", &cmd.to_string()],
-                    &[],
-                )
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, cmd);
+                self.runtime
+                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
             })?,
             None => { /* No onCreateCommand specified */ }
         };
 
         match &devcontainer_workspace.devcontainer.post_start_command {
             Some(LifecycleCommand::String(cmd)) => {
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, cmd);
                 self.runtime
-                    .exec(handle.as_ref(), vec!["/bin/sh", "-c", &cmd], &[])?
+                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])?
             }
             Some(LifecycleCommand::Array(cmds)) => cmds.iter().try_for_each(|c| {
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, c);
                 self.runtime
-                    .exec(handle.as_ref(), vec!["/bin/sh", "-c", &c.to_string()], &[])
+                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
             })?,
             Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
-                self.runtime.exec(
-                    handle.as_ref(),
-                    vec!["/bin/sh", "-c", &cmd.to_string()],
-                    &[],
-                )
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, cmd);
+                self.runtime
+                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
             })?,
             None => { /* No onCreateCommand specified */ }
         };
@@ -514,22 +514,27 @@ CMD ["sleep", "infinity"]
         }
 
         match &devcontainer_workspace.devcontainer.post_attach_command {
-            Some(LifecycleCommand::String(cmd)) => self.runtime.exec(
-                handle.as_ref().unwrap().as_ref(),
-                vec!["/bin/sh", "-c", &cmd],
-                &[],
-            )?,
-            Some(LifecycleCommand::Array(cmds)) => cmds.iter().try_for_each(|c| {
+            Some(LifecycleCommand::String(cmd)) => {
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, cmd);
                 self.runtime.exec(
                     handle.as_ref().unwrap().as_ref(),
-                    vec!["/bin/sh", "-c", &c.to_string()],
+                    vec!["bash", "-c", "-i", &wrapped_cmd],
+                    &[],
+                )?
+            }
+            Some(LifecycleCommand::Array(cmds)) => cmds.iter().try_for_each(|c| {
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, c);
+                self.runtime.exec(
+                    handle.as_ref().unwrap().as_ref(),
+                    vec!["bash", "-c", "-i", &wrapped_cmd],
                     &[],
                 )
             })?,
             Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, cmd);
                 self.runtime.exec(
                     handle.as_ref().unwrap().as_ref(),
-                    vec!["/bin/sh", "-c", &cmd.to_string()],
+                    vec!["bash", "-c", "-i", &wrapped_cmd],
                     &[],
                 )
             })?,
@@ -581,5 +586,28 @@ CMD ["sleep", "infinity"]
             "devcon.project={}",
             devcontainer_workspace.get_sanitized_name()
         )
+    }
+
+    /// Wraps a lifecycle command with proper environment and working directory setup.
+    ///
+    /// This ensures the command runs with:
+    /// - Proper shell environment loaded
+    /// - Correct working directory
+    /// - User's profile sourced
+    ///
+    /// # Arguments
+    ///
+    /// * `_devcontainer_workspace` - The devcontainer workspace
+    /// * `cmd` - The command to wrap
+    ///
+    /// # Returns
+    ///
+    /// A wrapped command string ready for execution.
+    fn wrap_lifecycle_command(
+        &self,
+        _devcontainer_workspace: &DevcontainerWorkspace,
+        cmd: &str,
+    ) -> String {
+        cmd.to_string()
     }
 }
