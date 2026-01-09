@@ -197,12 +197,11 @@ fi
 "#;
 
             fs::write(&dotfiles_helper_path, dotfiles_helper_content)?;
-            format!("COPY dotfiles_helper.sh /dotfiles_helper.sh \n")
-                + &format!(
-                    "RUN sh /dotfiles_helper.sh {} {} \n",
-                    repo,
-                    dotfiles_install_command.unwrap_or("")
-                )
+            format!(
+                "COPY dotfiles_helper.sh /dotfiles_helper.sh \nRUN sh /dotfiles_helper.sh {} {} \n",
+                repo,
+                dotfiles_install_command.unwrap_or("")
+            )
         } else {
             String::new()
         };

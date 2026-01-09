@@ -115,15 +115,13 @@ fn process_feature<'a>(
     if feature_json_path.exists() {
         let feature_json_content = fs::read_to_string(&feature_json_path)?;
         let feature_json: Value = serde_json::from_str(&feature_json_content)?;
-        if let Some(default_options) = feature_json.get("options") {
-            if let Value::Object(default_map) = default_options {
-                default_map.iter().for_each(|(key, value)| {
-                    feature_options
-                        .as_object_mut()
-                        .unwrap()
-                        .insert(key.clone(), value["default"].clone());
-                });
-            }
+        if let Some(Value::Object(default_map)) = feature_json.get("options") {
+            default_map.iter().for_each(|(key, value)| {
+                feature_options
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(key.clone(), value["default"].clone());
+            });
         }
     }
 
@@ -155,7 +153,7 @@ fn process_feature<'a>(
     Ok(FeatureProcessResult {
         feature: feature.clone(),
         options: feature_options,
-        relative_path: relative_path,
+        relative_path,
     })
 }
 
