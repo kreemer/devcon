@@ -60,6 +60,7 @@ use tempfile::TempDir;
 
 use crate::{
     devcontainer::DevcontainerWorkspace,
+    devcontainer::LifecycleCommand,
     driver::{process_features, runtime::ContainerRuntime},
 };
 
@@ -114,8 +115,6 @@ impl ContainerDriver {
     pub fn build(
         &self,
         devcontainer_workspace: DevcontainerWorkspace,
-        dotfiles_repo: Option<&str>,
-        dotfiles_install_command: Option<&str>,
         env_variables: &[String],
     ) -> anyhow::Result<()> {
         let directory = TempDir::new()?;
@@ -165,7 +164,7 @@ impl ContainerDriver {
         }
 
         // Add dotfiles setup if repository is provided
-        let dotfiles_setup = if let Some(repo) = dotfiles_repo {
+        let dotfiles_setup = {
             let dotfiles_helper_path = directory.path().join("dotfiles_helper.sh");
             let dotfiles_helper_content = r#"
 #!/bin/sh
@@ -192,13 +191,8 @@ fi
 "#;
 
             fs::write(&dotfiles_helper_path, dotfiles_helper_content)?;
-            format!(
-                "COPY dotfiles_helper.sh /dotfiles_helper.sh \nRUN sh /dotfiles_helper.sh {} {} \n",
-                repo,
-                dotfiles_install_command.unwrap_or("")
-            )
-        } else {
-            String::new()
+            "COPY dotfiles_helper.sh /dotfiles_helper.sh \nRUN chmod +x /dotfiles_helper.sh"
+                .to_string()
         };
 
         let dockerfile = directory.path().join("Dockerfile");
@@ -212,14 +206,15 @@ ENV _REMOTE_USER={{ remote_user }}
 ENV _CONTAINER_USER={{ container_user }}
 ENV _REMOTE_USER_HOME={{ remote_user_home }}
 ENV _CONTAINER_USER_HOME={{ container_user_home }}
+
 RUN mkdir /tmp/features
 {{ feature_install }}{{ env_setup }}
 
-FROM feature_last AS dotfiles
-USER {{ remote_user }}
+FROM feature_last AS dotfiles_setup
 {{ dotfiles_setup }}
 
-FROM dotfiles
+FROM dotfiles_setup
+USER {{ remote_user }}
 WORKDIR /workspaces/{{ workspace_name }}
 CMD ["sleep", "infinity"]
 "#,
@@ -253,8 +248,8 @@ CMD ["sleep", "infinity"]
             remote_user_home => remote_user_home,
             container_user_home => container_user_home,
             feature_install => &feature_install,
-            env_setup => &env_setup,
             dotfiles_setup => &dotfiles_setup,
+            env_setup => &env_setup,
             workspace_name => devcontainer_workspace.path.file_name().unwrap().to_string_lossy(),
         })?;
 
@@ -307,6 +302,8 @@ CMD ["sleep", "infinity"]
     pub fn start(
         &self,
         devcontainer_workspace: DevcontainerWorkspace,
+        dotfiles_repo: Option<&str>,
+        dotfiles_install_command: Option<&str>,
         env_variables: &[String],
     ) -> anyhow::Result<()> {
         let volume_mount = format!(
@@ -340,12 +337,86 @@ CMD ["sleep", "infinity"]
             }
         }
 
-        self.runtime.run(
+        let handle = self.runtime.run(
             &self.get_image_tag(&devcontainer_workspace),
             &volume_mount,
             &label,
             &processed_env_vars,
         )?;
+
+        match &devcontainer_workspace.devcontainer.on_create_command {
+            Some(LifecycleCommand::String(cmd)) => {
+                self.runtime
+                    .exec(handle.as_ref(), vec!["/bin/sh", "-c", &cmd], &[])?
+            }
+            Some(LifecycleCommand::Array(cmds)) => cmds.iter().try_for_each(|c| {
+                self.runtime
+                    .exec(handle.as_ref(), vec!["/bin/sh", "-c", &c.to_string()], &[])
+            })?,
+            Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
+                self.runtime.exec(
+                    handle.as_ref(),
+                    vec!["/bin/sh", "-c", &cmd.to_string()],
+                    &[],
+                )
+            })?,
+            None => { /* No onCreateCommand specified */ }
+        };
+
+        // Add dotfiles setup if repository is provided
+        if let Some(repo) = dotfiles_repo {
+            self.runtime.exec(
+                handle.as_ref(),
+                vec![
+                    "/bin/sh",
+                    "-c",
+                    &format!(
+                        "/dotfiles_helper.sh {} {}",
+                        repo,
+                        dotfiles_install_command.unwrap_or("")
+                    ),
+                ],
+                &[],
+            )?;
+        };
+
+        match &devcontainer_workspace.devcontainer.post_create_command {
+            Some(LifecycleCommand::String(cmd)) => {
+                self.runtime
+                    .exec(handle.as_ref(), vec!["/bin/sh", "-c", &cmd], &[])?
+            }
+            Some(LifecycleCommand::Array(cmds)) => cmds.iter().try_for_each(|c| {
+                self.runtime
+                    .exec(handle.as_ref(), vec!["/bin/sh", "-c", &c.to_string()], &[])
+            })?,
+            Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
+                self.runtime.exec(
+                    handle.as_ref(),
+                    vec!["/bin/sh", "-c", &cmd.to_string()],
+                    &[],
+                )
+            })?,
+            None => { /* No onCreateCommand specified */ }
+        };
+
+        match &devcontainer_workspace.devcontainer.post_start_command {
+            Some(LifecycleCommand::String(cmd)) => {
+                self.runtime
+                    .exec(handle.as_ref(), vec!["/bin/sh", "-c", &cmd], &[])?
+            }
+            Some(LifecycleCommand::Array(cmds)) => cmds.iter().try_for_each(|c| {
+                self.runtime
+                    .exec(handle.as_ref(), vec!["/bin/sh", "-c", &c.to_string()], &[])
+            })?,
+            Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
+                self.runtime.exec(
+                    handle.as_ref(),
+                    vec!["/bin/sh", "-c", &cmd.to_string()],
+                    &[],
+                )
+            })?,
+            None => { /* No onCreateCommand specified */ }
+        };
 
         Ok(())
     }
@@ -394,12 +465,12 @@ CMD ["sleep", "infinity"]
             .to_string_lossy();
         let containers = self.runtime.list()?;
 
-        let container_id = containers
+        let handle = containers
             .iter()
             .find(|(container_name, _)| container_name == &name)
-            .map(|(_, id)| id.clone());
+            .map(|(_, id)| id);
 
-        if container_id.is_none() {
+        if handle.is_none() {
             bail!("No running container found for project {}", name);
         }
 
@@ -415,9 +486,32 @@ CMD ["sleep", "infinity"]
             }
         }
 
+        match &devcontainer_workspace.devcontainer.post_attach_command {
+            Some(LifecycleCommand::String(cmd)) => self.runtime.exec(
+                handle.as_ref().unwrap().as_ref(),
+                vec!["/bin/sh", "-c", &cmd],
+                &[],
+            )?,
+            Some(LifecycleCommand::Array(cmds)) => cmds.iter().try_for_each(|c| {
+                self.runtime.exec(
+                    handle.as_ref().unwrap().as_ref(),
+                    vec!["/bin/sh", "-c", &c.to_string()],
+                    &[],
+                )
+            })?,
+            Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
+                self.runtime.exec(
+                    handle.as_ref().unwrap().as_ref(),
+                    vec!["/bin/sh", "-c", &cmd.to_string()],
+                    &[],
+                )
+            })?,
+            None => { /* No onCreateCommand specified */ }
+        };
+
         self.runtime.exec(
-            &container_id.unwrap(),
-            &default_shell.unwrap_or("zsh".to_string()),
+            handle.as_ref().unwrap().as_ref(),
+            vec![&default_shell.unwrap_or("zsh".to_string())],
             &processed_env_vars,
         )?;
 

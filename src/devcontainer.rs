@@ -49,6 +49,7 @@
 //! # Ok::<(), anyhow::Error>(())
 //! ```
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
@@ -117,6 +118,23 @@ impl DevcontainerWorkspace {
     }
 }
 
+/// Represents a lifecycle command that can be a string, array, or object.
+///
+/// The devcontainer spec supports multiple formats for lifecycle commands:
+/// - String: A single command to execute
+/// - Array: Multiple commands to execute in sequence
+/// - Object: Named commands with their execution strings
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum LifecycleCommand {
+    /// Single command as a string
+    String(String),
+    /// Multiple commands as an array
+    Array(Vec<String>),
+    /// Named commands as an object
+    Object(HashMap<String, String>),
+}
+
 /// Represents a devcontainer.json configuration.
 ///
 /// This structure contains all the necessary information to build and run
@@ -128,14 +146,24 @@ impl DevcontainerWorkspace {
 /// * `image` - The Docker base image to use
 /// * `features` - List of features to install in the container
 /// * `remote_user` - The user to use when connecting to the container
+/// * `on_create_command` - Command to run when creating the container
+/// * `update_content_command` - Command to run after updating content
+/// * `post_create_command` - Command to run after creating the container
+/// * `post_start_command` - Command to run after starting the container
+/// * `post_attach_command` - Command to run after attaching to the container
 #[derive(Debug)]
 pub struct Devcontainer {
     pub name: Option<String>,
     pub image: String,
     pub features: Vec<Feature>,
-    #[allow(dead_code)]
     pub remote_user: Option<String>,
     pub container_user: Option<String>,
+    pub on_create_command: Option<LifecycleCommand>,
+    #[allow(dead_code)]
+    pub update_content_command: Option<LifecycleCommand>,
+    pub post_create_command: Option<LifecycleCommand>,
+    pub post_start_command: Option<LifecycleCommand>,
+    pub post_attach_command: Option<LifecycleCommand>,
 }
 
 impl<'de> Deserialize<'de> for Devcontainer {
@@ -154,6 +182,16 @@ impl<'de> Deserialize<'de> for Devcontainer {
             remote_user: Option<String>,
             #[serde(rename = "containerUser")]
             container_user: Option<String>,
+            #[serde(rename = "onCreateCommand")]
+            on_create_command: Option<LifecycleCommand>,
+            #[serde(rename = "updateContentCommand")]
+            update_content_command: Option<LifecycleCommand>,
+            #[serde(rename = "postCreateCommand")]
+            post_create_command: Option<LifecycleCommand>,
+            #[serde(rename = "postStartCommand")]
+            post_start_command: Option<LifecycleCommand>,
+            #[serde(rename = "postAttachCommand")]
+            post_attach_command: Option<LifecycleCommand>,
         }
 
         let helper = DevcontainerHelper::deserialize(deserializer)?;
@@ -170,6 +208,11 @@ impl<'de> Deserialize<'de> for Devcontainer {
             features: features?,
             remote_user: helper.remote_user,
             container_user: helper.container_user,
+            on_create_command: helper.on_create_command,
+            update_content_command: helper.update_content_command,
+            post_create_command: helper.post_create_command,
+            post_start_command: helper.post_start_command,
+            post_attach_command: helper.post_attach_command,
         })
     }
 }
@@ -821,5 +864,113 @@ mod tests {
             FeatureSource::Local { .. } => {}
             _ => panic!("Expected Local feature"),
         }
+    }
+
+    #[test]
+    fn test_lifecycle_hook_string() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "postCreateCommand": "npm install"
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.post_create_command.is_some());
+
+        let command = match devcontainer.post_create_command {
+            Some(LifecycleCommand::String(cmd)) => cmd,
+            _ => unreachable!("Expected String command"),
+        };
+        assert_eq!(command, "npm install");
+    }
+
+    #[test]
+    fn test_lifecycle_hook_array() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "postStartCommand": ["npm install", "npm run dev"]
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.post_start_command.is_some());
+
+        let commands = match devcontainer.post_start_command {
+            Some(LifecycleCommand::Array(cmds)) => cmds,
+            _ => unreachable!("Expected Array command"),
+        };
+        assert_eq!(commands.len(), 2);
+        assert_eq!(commands[0], "npm install");
+        assert_eq!(commands[1], "npm run dev");
+    }
+
+    #[test]
+    fn test_lifecycle_hook_object() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "onCreateCommand": {
+                "install": "npm install",
+                "build": "npm run build"
+            }
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.on_create_command.is_some());
+
+        let commands = match devcontainer.on_create_command {
+            Some(LifecycleCommand::Object(map)) => map.values().cloned().collect::<Vec<String>>(),
+            _ => unreachable!("Expected Object command"),
+        };
+        assert_eq!(commands.len(), 2);
+        assert!(commands.contains(&"npm install".to_string()));
+        assert!(commands.contains(&"npm run build".to_string()));
+    }
+
+    #[test]
+    fn test_all_lifecycle_hooks() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "onCreateCommand": "echo onCreate",
+            "updateContentCommand": "echo updateContent",
+            "postCreateCommand": "echo postCreate",
+            "postStartCommand": "echo postStart",
+            "postAttachCommand": "echo postAttach"
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+
+        assert!(devcontainer.on_create_command.is_some());
+        assert!(devcontainer.update_content_command.is_some());
+        assert!(devcontainer.post_create_command.is_some());
+        assert!(devcontainer.post_start_command.is_some());
+        assert!(devcontainer.post_attach_command.is_some());
+    }
+
+    #[test]
+    fn test_lifecycle_hooks_optional() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04"
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+
+        assert!(devcontainer.on_create_command.is_none());
+        assert!(devcontainer.update_content_command.is_none());
+        assert!(devcontainer.post_create_command.is_none());
+        assert!(devcontainer.post_start_command.is_none());
+        assert!(devcontainer.post_attach_command.is_none());
     }
 }

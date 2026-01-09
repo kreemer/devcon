@@ -35,6 +35,11 @@ pub mod docker;
 ///
 /// This trait defines the interface for interacting with container runtimes,
 /// allowing DevCon to work with different container CLIs transparently.
+pub trait ContainerHandle {
+    /// Returns the container ID.
+    fn id(&self) -> &str;
+}
+
 pub trait ContainerRuntime {
     /// Builds a container image from a Dockerfile.
     ///
@@ -72,20 +77,25 @@ pub trait ContainerRuntime {
         volume_mount: &str,
         label: &str,
         env_vars: &[String],
-    ) -> anyhow::Result<()>;
+    ) -> anyhow::Result<Box<dyn ContainerHandle>>;
 
     /// Executes a command in a running container.
     ///
     /// # Arguments
     ///
-    /// * `container_id` - ID of the container
+    /// * `container_handle` - Handle of the container
     /// * `command` - Command to execute (e.g., shell path)
     /// * `env_vars` - Environment variables to set
     ///
     /// # Errors
     ///
     /// Returns an error if the exec command fails.
-    fn exec(&self, container_id: &str, command: &str, env_vars: &[String]) -> anyhow::Result<()>;
+    fn exec(
+        &self,
+        container_handle: &dyn ContainerHandle,
+        command: Vec<&str>,
+        env_vars: &[String],
+    ) -> anyhow::Result<()>;
 
     /// Lists running containers.
     ///
@@ -97,5 +107,5 @@ pub trait ContainerRuntime {
     /// # Errors
     ///
     /// Returns an error if the list command fails or output cannot be parsed.
-    fn list(&self) -> anyhow::Result<Vec<(String, String)>>;
+    fn list(&self) -> anyhow::Result<Vec<(String, Box<dyn ContainerHandle>)>>;
 }
