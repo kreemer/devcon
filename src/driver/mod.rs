@@ -45,11 +45,19 @@
 use std::fs::{self, File};
 
 use anyhow::bail;
+use serde_json::Value;
 use tempfile::TempDir;
 
 use crate::devcontainer::Feature;
 
 pub mod container;
+
+struct FeatureProcessResult {
+    pub feature: Feature,
+    #[allow(dead_code)]
+    pub options: serde_json::Value,
+    pub relative_path: String,
+}
 
 /// Processes a list of features, downloading and extracting them as needed.
 ///
@@ -74,17 +82,20 @@ pub mod container;
 fn process_features<'a>(
     features: &'a [Feature],
     directory: &'a TempDir,
-) -> anyhow::Result<Vec<(&'a Feature, String)>> {
-    let mut result: Vec<(&Feature, String)> = vec![];
+) -> anyhow::Result<Vec<FeatureProcessResult>> {
+    let mut result: Vec<FeatureProcessResult> = vec![];
     for feature in features {
-        let relative_path = process_feature(feature, directory)?;
-        result.push((feature, relative_path));
+        let feature_result = process_feature(feature, directory)?;
+        result.push(feature_result);
     }
     Ok(result)
 }
 
-fn process_feature<'a>(feature: &'a Feature, directory: &'a TempDir) -> anyhow::Result<String> {
-    match &feature.source {
+fn process_feature<'a>(
+    feature: &'a Feature,
+    directory: &'a TempDir,
+) -> anyhow::Result<FeatureProcessResult> {
+    let relative_path = match &feature.source {
         crate::devcontainer::FeatureSource::Registry {
             registry_type,
             registry,
@@ -92,7 +103,60 @@ fn process_feature<'a>(feature: &'a Feature, directory: &'a TempDir) -> anyhow::
         crate::devcontainer::FeatureSource::Local { path: _ } => {
             todo!("Local feature source not yet implemented")
         }
+    }?;
+
+    // Read devcontainer-feature.json if it exists to get default options
+    let feature_json_path = directory
+        .path()
+        .join(&relative_path)
+        .join("devcontainer-feature.json");
+
+    let mut feature_options = serde_json::json!({});
+    if feature_json_path.exists() {
+        let feature_json_content = fs::read_to_string(&feature_json_path)?;
+        let feature_json: Value = serde_json::from_str(&feature_json_content)?;
+        if let Some(default_options) = feature_json.get("options") {
+            if let Value::Object(default_map) = default_options {
+                default_map.iter().for_each(|(key, value)| {
+                    feature_options
+                        .as_object_mut()
+                        .unwrap()
+                        .insert(key.clone(), value["default"].clone());
+                });
+            }
+        }
     }
+
+    // Override default options with user-specified options
+    if feature.options.is_object() {
+        for (key, value) in feature.options.as_object().unwrap() {
+            if feature_options.get(key).is_some() {
+                feature_options[key] = value.clone();
+            }
+        }
+    }
+
+    // Creating env variable file devcontainer-features.env which can be sourced during feature installation
+    let env_file_path = directory
+        .path()
+        .join(&relative_path)
+        .join("devcontainer-features.env");
+    let mut env_file = File::create(&env_file_path)?;
+    for (key, value) in feature_options.as_object().unwrap() {
+        use std::io::Write;
+        writeln!(
+            env_file,
+            "export {}={}",
+            key.to_uppercase(),
+            value.as_str().unwrap_or("")
+        )?;
+    }
+
+    Ok(FeatureProcessResult {
+        feature: feature.clone(),
+        options: feature_options,
+        relative_path: relative_path,
+    })
 }
 
 fn download_feature<'a>(
@@ -190,26 +254,69 @@ fn download_feature<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::tempdir;
 
     #[test]
-    fn test_process_feature_installation() {
+    fn test_download_feature() {
+        let registry = crate::devcontainer::FeatureRegistry {
+            owner: "devcontainers".to_string(),
+            repository: "features".to_string(),
+            name: "node".to_string(),
+            version: "1.0.0".to_string(),
+        };
+        let temp_dir = tempdir().unwrap();
+        let result = download_feature(
+            &crate::devcontainer::FeatureRegistryType::Ghcr,
+            &registry,
+            &temp_dir,
+        );
+        assert!(result.is_ok());
+        let relative_path = result.unwrap();
+        let feature_path = temp_dir.path().join(&relative_path);
+        assert!(feature_path.exists());
+    }
+
+    #[test]
+    fn test_process_feature() {
         let feature = Feature {
             source: crate::devcontainer::FeatureSource::Registry {
                 registry_type: crate::devcontainer::FeatureRegistryType::Ghcr,
                 registry: crate::devcontainer::FeatureRegistry {
-                    owner: "shyim".to_string(),
-                    repository: "devcontainers-features".to_string(),
-                    name: "php".to_string(),
-                    version: "latest".to_string(),
+                    owner: "devcontainers".to_string(),
+                    repository: "features".to_string(),
+                    name: "node".to_string(),
+                    version: "1.0.0".to_string(),
+                },
+            },
+            options: serde_json::json!({
+                "version": "16"
+            }),
+        };
+        let temp_dir = tempdir().unwrap();
+        let result = process_feature(&feature, &temp_dir);
+        assert!(result.is_ok());
+        let feature_result = result.unwrap();
+        assert_eq!(feature_result.options["version"], "16");
+    }
+
+    #[test]
+    fn test_process_feature_default() {
+        let feature = Feature {
+            source: crate::devcontainer::FeatureSource::Registry {
+                registry_type: crate::devcontainer::FeatureRegistryType::Ghcr,
+                registry: crate::devcontainer::FeatureRegistry {
+                    owner: "devcontainers".to_string(),
+                    repository: "features".to_string(),
+                    name: "node".to_string(),
+                    version: "1.0.0".to_string(),
                 },
             },
             options: serde_json::json!({}),
         };
-        let temp_dir = TempDir::new().unwrap();
+        let temp_dir = tempdir().unwrap();
         let result = process_feature(&feature, &temp_dir);
         assert!(result.is_ok());
-        let relative_path = result.unwrap();
-        let expected_path = format!("php/extract");
-        assert_eq!(relative_path, expected_path);
+        let feature_result = result.unwrap();
+        assert_eq!(feature_result.options["version"], "lts");
     }
 }
