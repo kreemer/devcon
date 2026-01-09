@@ -95,12 +95,7 @@ impl ContainerRuntime for AppleRuntime {
         Ok(())
     }
 
-    fn exec(
-        &self,
-        container_id: &str,
-        command: &str,
-        env_vars: &[String],
-    ) -> anyhow::Result<()> {
+    fn exec(&self, container_id: &str, command: &str, env_vars: &[String]) -> anyhow::Result<()> {
         let mut cmd = Command::new("container");
         cmd.arg("exec").arg("-it");
 

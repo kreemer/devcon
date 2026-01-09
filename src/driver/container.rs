@@ -424,7 +424,6 @@ CMD ["sleep", "infinity"]
         Ok(())
     }
 
-
     /// Returns the Docker image tag for this container.
     ///
     /// The tag is formatted as `devcon-{container_name}` where the container
