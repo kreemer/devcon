@@ -113,6 +113,7 @@ impl ContainerDriver {
         &self,
         devcontainer_workspace: DevcontainerWorkspace,
         dotfiles_repo: Option<&str>,
+        dotfiles_install_command: Option<&str>,
         env_variables: &[String],
     ) -> anyhow::Result<()> {
         let directory = TempDir::new()?;
@@ -170,10 +171,38 @@ impl ContainerDriver {
 
         // Add dotfiles setup if repository is provided
         let dotfiles_setup = if let Some(repo) = dotfiles_repo {
-            format!(
-                "RUN cd && git clone {} .dotfiles && cd .dotfiles && ./setup.sh || true\n",
-                repo
-            )
+            let dotfiles_helper_path = directory.path().join("dotfiles_helper.sh");
+            let dotfiles_helper_content = r#"
+#!/bin/sh
+set -e
+cd && git clone $1 .dotfiles && cd .dotfiles
+if [ -n "$2" ]; then
+    chmod +x $2
+    ./$2 || true
+else
+    for f in install.sh setup.sh bootstrap.sh script/install.sh script/setup.sh script/bootstrap.sh
+    do
+        if [ -e $f ]
+        then
+            installCommand=$f
+            break
+        fi
+    done
+
+    if [ -n "$installCommand" ]; then
+        chmod +x $installCommand
+        ./$installCommand || true
+    fi
+fi
+"#;
+
+            fs::write(&dotfiles_helper_path, dotfiles_helper_content)?;
+            format!("COPY dotfiles_helper.sh /dotfiles_helper.sh \n")
+                + &format!(
+                    "RUN sh /dotfiles_helper.sh {} {} \n",
+                    repo,
+                    dotfiles_install_command.unwrap_or("")
+                )
         } else {
             String::new()
         };

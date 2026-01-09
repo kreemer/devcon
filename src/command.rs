@@ -74,6 +74,8 @@ pub fn handle_config_command(create_if_missing: bool) -> anyhow::Result<()> {
 # Modify the values below to customize your DevCon experience.
 #
 # dotfiles_repository: https://github.com/user/dotfiles.git
+# dotfiles_install_command: ./install.sh
+# default_shell: /bin/zsh
 # additional_features:
 #   ghcr.io/someowner/somerepo/somefeature:latest:
 #     option1: value1
@@ -138,6 +140,7 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
     let result = driver.build(
         devcontainer_workspace,
         config.dotfiles_repository.as_deref(),
+        config.dotfiles_install_command.as_deref(),
         &[],
     );
 
@@ -241,8 +244,6 @@ mod test {
             container_content,
         )
         .unwrap();
-
-        println!("Temp dir: {}", temp_dir.path().display());
 
         let result = handle_build_command(temp_dir.path().to_path_buf());
         assert!(result.is_ok(), "Build command failed: {:?}", result.err());
