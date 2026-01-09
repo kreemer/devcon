@@ -68,6 +68,13 @@ pub struct Config {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub dotfiles_repository: Option<String>,
 
+    /// Install command which will be used to install dotfiles
+    ///
+    /// If set, this command will be used to install the dotfiles after cloning
+    /// If unset, will search for common install scripts like install.sh, setup.sh, etc.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dotfiles_install_command: Option<String>,
+
     /// Default shell
     ///
     /// If set, the shell command will use this shell to exec into the container
