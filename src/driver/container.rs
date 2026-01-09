@@ -58,6 +58,7 @@ use std::{
 };
 
 use anyhow::bail;
+use minijinja::Environment;
 use tempfile::TempDir;
 
 use crate::{devcontainer::DevcontainerWorkspace, driver::process_features};
@@ -162,13 +163,6 @@ impl ContainerDriver {
             env_setup.push_str(&format!("ENV {}\n", env_var));
         }
 
-        // Determine remote user
-        let remote_user = devcontainer_workspace
-            .devcontainer
-            .remote_user
-            .as_deref()
-            .unwrap_or("root");
-
         // Add dotfiles setup if repository is provided
         let dotfiles_setup = if let Some(repo) = dotfiles_repo {
             let dotfiles_helper_path = directory.path().join("dotfiles_helper.sh");
@@ -209,31 +203,59 @@ fi
         let dockerfile = directory.path().join("Dockerfile");
         File::create(&dockerfile)?;
 
-        let contents = format!(
+        let env = Environment::new();
+        let template = env.template_from_str(
             r#"
-FROM {} AS base
+FROM {{ image }} AS base
+ENV _REMOTE_USER={{ remote_user }}
+ENV _CONTAINER_USER={{ container_user }}
+ENV _REMOTE_USER_HOME={{ remote_user_home }}
+ENV _CONTAINER_USER_HOME={{ container_user_home }}
 RUN mkdir /tmp/features
-{}{}
+{{ feature_install }}{{ env_setup }}
 
 FROM feature_last AS dotfiles
-USER {}
-{}
+USER {{ remote_user }}
+{{ dotfiles_setup }}
 
 FROM dotfiles
-WORKDIR /workspaces/{}
+WORKDIR /workspaces/{{ workspace_name }}
 CMD ["sleep", "infinity"]
-    "#,
-            devcontainer_workspace.devcontainer.image,
-            feature_install,
-            env_setup,
-            remote_user,
-            dotfiles_setup,
-            devcontainer_workspace
-                .path
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-        );
+"#,
+        )?;
+
+        let remote_user_val = devcontainer_workspace
+            .devcontainer
+            .remote_user
+            .as_deref()
+            .unwrap_or("vscode");
+        let container_user_val = devcontainer_workspace
+            .devcontainer
+            .container_user
+            .as_deref()
+            .unwrap_or("vscode");
+        let container_user_home = if container_user_val == "root" {
+            "/root".to_string()
+        } else {
+            format!("/home/{}", container_user_val)
+        };
+        let remote_user_home = if remote_user_val == "root" {
+            "/root".to_string()
+        } else {
+            format!("/home/{}", remote_user_val)
+        };
+
+        let contents = template.render(minijinja::context! {
+            image => &devcontainer_workspace.devcontainer.image,
+            remote_user => remote_user_val,
+            container_user => container_user_val,
+            remote_user_home => remote_user_home,
+            container_user_home => container_user_home,
+            feature_install => &feature_install,
+            env_setup => &env_setup,
+            dotfiles_setup => &dotfiles_setup,
+            workspace_name => devcontainer_workspace.path.file_name().unwrap().to_string_lossy(),
+        })?;
 
         fs::write(&dockerfile, contents)?;
 
