@@ -135,6 +135,7 @@ pub struct Devcontainer {
     pub features: Vec<Feature>,
     #[allow(dead_code)]
     pub remote_user: Option<String>,
+    pub container_user: Option<String>,
 }
 
 impl<'de> Deserialize<'de> for Devcontainer {
@@ -151,6 +152,8 @@ impl<'de> Deserialize<'de> for Devcontainer {
             features: Vec<(String, serde_json::Value)>,
             #[serde(rename = "remoteUser")]
             remote_user: Option<String>,
+            #[serde(rename = "containerUser")]
+            container_user: Option<String>,
         }
 
         let helper = DevcontainerHelper::deserialize(deserializer)?;
@@ -166,6 +169,7 @@ impl<'de> Deserialize<'de> for Devcontainer {
             image: helper.image,
             features: features?,
             remote_user: helper.remote_user,
+            container_user: helper.container_user,
         })
     }
 }
