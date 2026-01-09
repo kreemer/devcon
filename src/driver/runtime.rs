@@ -108,4 +108,15 @@ pub trait ContainerRuntime {
     ///
     /// Returns an error if the list command fails or output cannot be parsed.
     fn list(&self) -> anyhow::Result<Vec<(String, Box<dyn ContainerHandle>)>>;
+
+    /// List images.
+    ///
+    /// # Returns
+    ///
+    /// A vector of image tags which are built by devcon.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the list images command fails or output cannot be parsed.
+    fn images(&self) -> anyhow::Result<Vec<String>>;
 }

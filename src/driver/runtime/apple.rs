@@ -143,17 +143,56 @@ impl ContainerRuntime for AppleRuntime {
 
         let result: Vec<(String, Box<dyn super::ContainerHandle>)> = containers
             .iter()
-            .map(|container| {
-                let name = container["configuration"]["labels"]["devcon"]
+            .filter_map(|container| {
+                let project_name = container["configuration"]["labels"]["devcon.project"]
                     .as_str()
-                    .unwrap_or_default()
-                    .to_string();
+                    .unwrap_or_default();
+
+                if project_name.is_empty() {
+                    return None;
+                }
+
                 let id = container["configuration"]["id"]
                     .as_str()
                     .unwrap_or_default()
                     .to_string();
+
+                let container_name = format!("devcon.{}", project_name);
                 let handle = AppleContainerHandle { id };
-                (name, Box::new(handle) as Box<dyn super::ContainerHandle>)
+                Some((
+                    container_name,
+                    Box::new(handle) as Box<dyn super::ContainerHandle>,
+                ))
+            })
+            .collect();
+
+        Ok(result)
+    }
+
+    fn images(&self) -> anyhow::Result<Vec<String>> {
+        let output = Command::new("container")
+            .arg("images")
+            .arg("--format")
+            .arg("json")
+            .output()?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        let images: Vec<serde_json::Value> = serde_json::from_str(&stdout)?;
+
+        let result: Vec<String> = images
+            .iter()
+            .filter_map(|image| {
+                let name = &image["reference"];
+                if name.is_null() {
+                    return None;
+                }
+
+                if name.as_str().unwrap_or_default().starts_with("devcon") {
+                    Some(name.as_str().unwrap_or_default().to_string())
+                } else {
+                    None
+                }
             })
             .collect();
 

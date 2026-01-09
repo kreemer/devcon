@@ -59,8 +59,8 @@ use minijinja::Environment;
 use tempfile::TempDir;
 
 use crate::{
-    devcontainer::DevcontainerWorkspace,
-    devcontainer::LifecycleCommand,
+    config::Config,
+    devcontainer::{DevcontainerWorkspace, LifecycleCommand},
     driver::{process_features, runtime::ContainerRuntime},
 };
 
@@ -69,13 +69,14 @@ use crate::{
 /// This struct encapsulates the logic for building container images
 /// and starting container instances based on devcontainer configurations.
 pub struct ContainerDriver {
+    config: Config,
     runtime: Box<dyn ContainerRuntime>,
 }
 
 impl ContainerDriver {
     /// Creates a new ContainerDriver with the specified runtime.
-    pub fn new(runtime: Box<dyn ContainerRuntime>) -> Self {
-        Self { runtime }
+    pub fn new(config: Config, runtime: Box<dyn ContainerRuntime>) -> Self {
+        Self { config, runtime }
     }
     /// Builds a container image from the devcontainer configuration.
     ///
@@ -302,10 +303,26 @@ CMD ["sleep", "infinity"]
     pub fn start(
         &self,
         devcontainer_workspace: DevcontainerWorkspace,
-        dotfiles_repo: Option<&str>,
-        dotfiles_install_command: Option<&str>,
         env_variables: &[String],
     ) -> anyhow::Result<()> {
+        let handles = self.runtime.list()?;
+        let handle = handles
+            .iter()
+            .find(|(name, _)| name == &self.get_container_name(&devcontainer_workspace));
+
+        if handle.is_some() {
+            return Ok(());
+        }
+
+        let images = self.runtime.images()?;
+        let already_built = images.iter().any(|image| {
+            image == &format!("{}:latest", self.get_image_tag(&devcontainer_workspace))
+        });
+
+        if !already_built {
+            self.build(devcontainer_workspace.clone(), &[])?;
+        }
+
         let volume_mount = format!(
             "{}:/workspaces/{}",
             devcontainer_workspace.path.to_string_lossy(),
@@ -316,14 +333,7 @@ CMD ["sleep", "infinity"]
                 .to_string_lossy()
         );
 
-        let label = format!(
-            "devcon={}",
-            devcontainer_workspace
-                .path
-                .file_name()
-                .unwrap()
-                .to_string_lossy()
-        );
+        let label = self.get_container_label(&devcontainer_workspace);
 
         // Process environment variables
         let mut processed_env_vars = Vec::new();
@@ -364,7 +374,7 @@ CMD ["sleep", "infinity"]
         };
 
         // Add dotfiles setup if repository is provided
-        if let Some(repo) = dotfiles_repo {
+        if let Some(repo) = self.config.dotfiles_repository.as_deref() {
             self.runtime.exec(
                 handle.as_ref(),
                 vec![
@@ -373,7 +383,10 @@ CMD ["sleep", "infinity"]
                     &format!(
                         "/dotfiles_helper.sh {} {}",
                         repo,
-                        dotfiles_install_command.unwrap_or("")
+                        self.config
+                            .dotfiles_install_command
+                            .as_deref()
+                            .unwrap_or("")
                     ),
                 ],
                 &[],
@@ -452,12 +465,24 @@ CMD ["sleep", "infinity"]
     /// # Ok(())
     /// # }
     /// ```
-    pub fn shell(
-        &self,
-        devcontainer_workspace: DevcontainerWorkspace,
-        env_variables: &[String],
-        default_shell: Option<String>,
-    ) -> anyhow::Result<()> {
+    pub fn shell(&self, devcontainer_workspace: DevcontainerWorkspace) -> anyhow::Result<()> {
+        let handles = self.runtime.list()?;
+        let handle = handles
+            .iter()
+            .find(|(name, _)| name == &self.get_container_name(&devcontainer_workspace));
+
+        if handle.is_none() {
+            println!(
+                "No running container found for project {}, starting one...",
+                devcontainer_workspace
+                    .path
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+            );
+            self.start(devcontainer_workspace.clone(), &[])?;
+        }
+
         let name = devcontainer_workspace
             .path
             .file_name()
@@ -467,7 +492,9 @@ CMD ["sleep", "infinity"]
 
         let handle = containers
             .iter()
-            .find(|(container_name, _)| container_name == &name)
+            .find(|(container_name, _)| {
+                container_name == &self.get_container_name(&devcontainer_workspace)
+            })
             .map(|(_, id)| id);
 
         if handle.is_none() {
@@ -476,7 +503,7 @@ CMD ["sleep", "infinity"]
 
         // Process environment variables
         let mut processed_env_vars = Vec::new();
-        for env_var in env_variables {
+        for env_var in self.config.env_variables.iter() {
             if env_var.contains("=") {
                 processed_env_vars.push(env_var.clone());
             } else {
@@ -511,7 +538,7 @@ CMD ["sleep", "infinity"]
 
         self.runtime.exec(
             handle.as_ref().unwrap().as_ref(),
-            vec![&default_shell.unwrap_or("zsh".to_string())],
+            vec![&self.config.default_shell.as_deref().unwrap_or("zsh")],
             &processed_env_vars,
         )?;
 
@@ -520,13 +547,39 @@ CMD ["sleep", "infinity"]
 
     /// Returns the Docker image tag for this container.
     ///
-    /// The tag is formatted as `devcon-{container_name}` where the container
-    /// name is either the configured name or "default".
+    /// The tag is formatted as `devcon-{sanitized_name}` where the sanitized
+    /// name is the project directory name with special characters replaced.
     ///
     /// # Returns
     ///
     /// A string containing the full image tag.
     fn get_image_tag(&self, devcontainer_workspace: &DevcontainerWorkspace) -> String {
         format!("devcon-{}", devcontainer_workspace.get_sanitized_name())
+    }
+
+    /// Returns the container name for this devcontainer.
+    ///
+    /// The name is formatted as `devcon.{sanitized_name}` where the sanitized
+    /// name is the project directory name with special characters replaced.
+    ///
+    /// # Returns
+    ///
+    /// A string containing the container name.
+    fn get_container_name(&self, devcontainer_workspace: &DevcontainerWorkspace) -> String {
+        format!("devcon.{}", devcontainer_workspace.get_sanitized_name())
+    }
+
+    /// Returns the container label for this devcontainer.
+    ///
+    /// The label is formatted as `devcon.project={sanitized_name}`.
+    ///
+    /// # Returns
+    ///
+    /// A string containing the label key-value pair.
+    fn get_container_label(&self, devcontainer_workspace: &DevcontainerWorkspace) -> String {
+        format!(
+            "devcon.project={}",
+            devcontainer_workspace.get_sanitized_name()
+        )
     }
 }

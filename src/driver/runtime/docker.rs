@@ -134,7 +134,7 @@ impl ContainerRuntime for DockerRuntime {
         let output = Command::new("docker")
             .arg("ps")
             .arg("--filter")
-            .arg("label=devcon")
+            .arg("label=devcon.project")
             .arg("--format")
             .arg("{{json .}}")
             .output()?;
@@ -151,25 +151,53 @@ impl ContainerRuntime for DockerRuntime {
 
             let container: serde_json::Value = serde_json::from_str(line)?;
 
-            // Parse labels to find devcon label value
+            // Parse labels to find devcon.project label value
             let labels = container["Labels"].as_str().unwrap_or_default();
-            let mut devcon_name = String::new();
+            let mut container_name = String::new();
 
             // Labels format: "key1=value1,key2=value2"
             for label_pair in labels.split(',') {
                 if let Some((key, value)) = label_pair.split_once('=')
-                    && key == "devcon"
+                    && key == "devcon.project"
                 {
-                    devcon_name = value.to_string();
+                    container_name = format!("devcon.{}", value);
                     break;
                 }
             }
 
             let id = container["ID"].as_str().unwrap_or_default().to_string();
 
-            if !devcon_name.is_empty() {
+            if !container_name.is_empty() {
                 let handle = DockerContainerHandle { id: id.clone() };
-                result.push((devcon_name, Box::new(handle)));
+                result.push((container_name, Box::new(handle)));
+            }
+        }
+
+        Ok(result)
+    }
+
+    fn images(&self) -> anyhow::Result<Vec<String>> {
+        let output = Command::new("docker")
+            .arg("image")
+            .arg("list")
+            .arg("--format")
+            .arg("{{json .}}")
+            .output()?;
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut result: Vec<String> = Vec::new();
+        // Docker outputs one JSON object per line, not an array
+        for line in stdout.lines() {
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            let image: serde_json::Value = serde_json::from_str(line)?;
+            let repository = image["Repository"].as_str().unwrap_or_default();
+            let tag = image["Tag"].as_str().unwrap_or_default();
+            // Assuming devcon-built images have "devcon" in their repository name
+            if repository.starts_with("devcon") {
+                result.push(format!("{}:{}", repository, tag));
             }
         }
 

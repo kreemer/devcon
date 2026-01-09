@@ -76,6 +76,7 @@ use serde::de;
 ///   path: PathBuf::from("/path/to/project"),
 ///   devcontainer: Devcontainer::try_from(PathBuf::from("/path/to/project"))?,
 /// };
+#[derive(Clone)]
 pub struct DevcontainerWorkspace {
     pub path: PathBuf,
     pub devcontainer: Devcontainer,
@@ -151,7 +152,7 @@ pub enum LifecycleCommand {
 /// * `post_create_command` - Command to run after creating the container
 /// * `post_start_command` - Command to run after starting the container
 /// * `post_attach_command` - Command to run after attaching to the container
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Devcontainer {
     pub name: Option<String>,
     pub image: String,
