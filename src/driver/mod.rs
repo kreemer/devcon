@@ -51,6 +51,7 @@ use tempfile::TempDir;
 use crate::devcontainer::Feature;
 
 pub mod container;
+pub mod runtime;
 
 struct FeatureProcessResult {
     pub feature: Feature,
