@@ -95,12 +95,7 @@ impl ContainerRuntime for DockerRuntime {
         Ok(())
     }
 
-    fn exec(
-        &self,
-        container_id: &str,
-        command: &str,
-        env_vars: &[String],
-    ) -> anyhow::Result<()> {
+    fn exec(&self, container_id: &str, command: &str, env_vars: &[String]) -> anyhow::Result<()> {
         let mut cmd = Command::new("docker");
         cmd.arg("exec").arg("-it");
 
@@ -144,11 +139,11 @@ impl ContainerRuntime for DockerRuntime {
 
             // Labels format: "key1=value1,key2=value2"
             for label_pair in labels.split(',') {
-                if let Some((key, value)) = label_pair.split_once('=') {
-                    if key == "devcon" {
-                        devcon_name = value.to_string();
-                        break;
-                    }
+                if let Some((key, value)) = label_pair.split_once('=')
+                    && key == "devcon"
+                {
+                    devcon_name = value.to_string();
+                    break;
                 }
             }
 
