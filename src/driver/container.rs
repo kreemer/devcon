@@ -155,8 +155,11 @@ impl ContainerDriver {
 
             i += 1;
         }
-
-        feature_install.push_str(&format!("FROM feature_{} AS feature_last \n", i - 1));
+        if i > 0 {
+            feature_install.push_str(&format!("FROM feature_{} AS feature_last \n", i - 1));
+        } else {
+            feature_install.push_str("FROM base AS feature_last \n");
+        }
 
         // Add environment variables
         let mut env_setup = String::new();
@@ -208,8 +211,10 @@ ENV _CONTAINER_USER={{ container_user }}
 ENV _REMOTE_USER_HOME={{ remote_user_home }}
 ENV _CONTAINER_USER_HOME={{ container_user_home }}
 
+USER root
 RUN mkdir /tmp/features
-{{ feature_install }}{{ env_setup }}
+{{ feature_install }}
+{{ env_setup }}
 
 FROM feature_last AS dotfiles_setup
 {{ dotfiles_setup }}
@@ -253,6 +258,8 @@ CMD ["sleep", "infinity"]
             env_setup => &env_setup,
             workspace_name => devcontainer_workspace.path.file_name().unwrap().to_string_lossy(),
         })?;
+
+        println!("Generated Dockerfile:\n{}", contents);
 
         fs::write(&dockerfile, contents)?;
 
