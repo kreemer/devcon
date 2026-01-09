@@ -209,3 +209,42 @@ pub fn handle_shell_command(path: PathBuf, _env: &[String]) -> anyhow::Result<()
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+mod test {
+    use super::*;
+
+    #[test]
+    fn test_handle_config_command() {
+        let result = handle_config_command(false);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn test_handle_simple_build_command() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let container_content = r#"
+        {
+            "name": "devcontainer",
+            "image": "mcr.microsoft.com/devcontainers/base:ubuntu",
+            "features": {
+               "ghcr.io/shyim/devcontainers-features/php": {}
+            }
+        }
+        "#;
+
+        let devcontainer_path = temp_dir.path().join(".devcontainer");
+        std::fs::create_dir_all(&devcontainer_path).unwrap();
+        std::fs::write(
+            devcontainer_path.join("devcontainer.json"),
+            container_content,
+        )
+        .unwrap();
+
+        println!("Temp dir: {}", temp_dir.path().display());
+
+        let result = handle_build_command(temp_dir.path().to_path_buf());
+        assert!(result.is_ok(), "Build command failed: {:?}", result.err());
+    }
+}

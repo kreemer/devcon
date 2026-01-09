@@ -116,14 +116,17 @@ impl ContainerDriver {
         env_variables: &[String],
     ) -> anyhow::Result<()> {
         let directory = TempDir::new()?;
-
+        println!(
+            "Building container in temporary directory: {}",
+            directory.path().to_string_lossy()
+        );
         let processed_features =
             process_features(&devcontainer_workspace.devcontainer.features, &directory)?;
         let mut feature_install = String::new();
 
         let mut i = 0;
-        for (feature, feature_path) in processed_features {
-            let feature_name = match &feature.source {
+        for feature_result in processed_features {
+            let feature_name = match &feature_result.feature.source {
                 crate::devcontainer::FeatureSource::Registry {
                     registry_type: _,
                     registry,
@@ -139,11 +142,12 @@ impl ContainerDriver {
             }
             feature_install.push_str(&format!(
                 "COPY {}/* /tmp/features/{}/ \n",
-                feature_path, feature_name
+                feature_result.relative_path, feature_name
             ));
+
             feature_install.push_str(&format!(
-                "RUN chmod +x /tmp/features/{}/install.sh && /tmp/features/{}/install.sh \n",
-                feature_name, feature_name
+                "RUN chmod +x /tmp/features/{}/install.sh && . /tmp/features/{}/devcontainer-features.env && /tmp/features/{}/install.sh \n",
+                feature_name, feature_name, feature_name
             ));
 
             i += 1;

@@ -243,14 +243,14 @@ impl Devcontainer {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Feature {
     pub source: FeatureSource,
     #[allow(dead_code)]
     pub options: serde_json::Value,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FeatureSource {
     Registry {
         registry_type: FeatureRegistryType,
@@ -261,7 +261,7 @@ pub enum FeatureSource {
     },
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FeatureRegistry {
     pub owner: String,
     pub repository: String,
@@ -269,7 +269,7 @@ pub struct FeatureRegistry {
     pub version: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum FeatureRegistryType {
     Ghcr,
 }
