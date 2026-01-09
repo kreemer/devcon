@@ -85,8 +85,7 @@ pub trait ContainerRuntime {
     /// # Errors
     ///
     /// Returns an error if the exec command fails.
-    fn exec(&self, container_id: &str, command: &str, env_vars: &[String])
-        -> anyhow::Result<()>;
+    fn exec(&self, container_id: &str, command: &str, env_vars: &[String]) -> anyhow::Result<()>;
 
     /// Lists running containers.
     ///

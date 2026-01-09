@@ -101,7 +101,10 @@ pub struct Config {
     ///
     /// Valid values: "auto", "docker", "apple"
     /// If set to "auto" (default), the runtime will be auto-detected.
-    #[serde(default = "default_runtime", skip_serializing_if = "is_default_runtime")]
+    #[serde(
+        default = "default_runtime",
+        skip_serializing_if = "is_default_runtime"
+    )]
     pub runtime: String,
 }
 
