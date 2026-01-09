@@ -35,7 +35,7 @@ mod driver;
     name = "devcon",
     about = "A TUI application for managing and launching development containers",
     long_about = "DevCon helps you manage your development containers by keeping track of recent projects and providing a convenient interface to them with devcontainer-cli.",
-    version = "0.2.0"
+    version = "0.2.3"
 )]
 struct Cli {
     #[command(subcommand)]
