@@ -261,8 +261,6 @@ CMD ["sleep", "infinity"]
             workspace_name => devcontainer_workspace.path.file_name().unwrap().to_string_lossy(),
         })?;
 
-        println!("Generated Dockerfile:\n{}", contents);
-
         fs::write(&dockerfile, contents)?;
 
         self.runtime.build(
