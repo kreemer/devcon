@@ -206,6 +206,8 @@ fi
         let template = env.template_from_str(
             r#"
 FROM {{ image }} AS base
+ENV DEVCON=true
+ENV DEVCON_WORKSPACE_NAME={{ workspace_name }}
 ENV _REMOTE_USER={{ remote_user }}
 ENV _CONTAINER_USER={{ container_user }}
 ENV _REMOTE_USER_HOME={{ remote_user_home }}
