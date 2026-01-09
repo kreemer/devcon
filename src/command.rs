@@ -149,7 +149,7 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
         _ => anyhow::bail!("Unknown runtime: {}", runtime_name),
     };
 
-    let driver = ContainerDriver::new(runtime);
+    let driver = ContainerDriver::new(config, runtime);
     let result = driver.build(devcontainer_workspace, &[]);
 
     if result.is_err() {
@@ -203,13 +203,8 @@ pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
         _ => anyhow::bail!("Unknown runtime: {}", runtime_name),
     };
 
-    let driver = ContainerDriver::new(runtime);
-    driver.start(
-        devcontainer_workspace,
-        config.dotfiles_repository.as_deref(),
-        config.dotfiles_install_command.as_deref(),
-        &[],
-    )?;
+    let driver = ContainerDriver::new(config, runtime);
+    driver.start(devcontainer_workspace, &[])?;
 
     Ok(())
 }
@@ -236,12 +231,8 @@ pub fn handle_shell_command(path: PathBuf, _env: &[String]) -> anyhow::Result<()
         _ => anyhow::bail!("Unknown runtime: {}", runtime_name),
     };
 
-    let driver = ContainerDriver::new(runtime);
-    driver.shell(
-        devcontainer_workspace,
-        &config.env_variables,
-        config.default_shell,
-    )?;
+    let driver = ContainerDriver::new(config, runtime);
+    driver.shell(devcontainer_workspace)?;
     Ok(())
 }
 
