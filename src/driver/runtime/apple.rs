@@ -34,6 +34,17 @@ use super::ContainerRuntime;
 /// Apple's container CLI runtime implementation.
 pub struct AppleRuntime;
 
+/// Handle for an Apple container instance.
+pub struct AppleContainerHandle {
+    id: String,
+}
+
+impl super::ContainerHandle for AppleContainerHandle {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 impl AppleRuntime {
     pub fn new() -> Self {
         Self
@@ -69,7 +80,7 @@ impl ContainerRuntime for AppleRuntime {
         volume_mount: &str,
         label: &str,
         env_vars: &[String],
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Box<dyn super::ContainerHandle>> {
         let mut cmd = Command::new("container");
         cmd.arg("run")
             .arg("--rm")
@@ -86,16 +97,23 @@ impl ContainerRuntime for AppleRuntime {
 
         cmd.arg(image_tag);
 
-        let result = cmd.status()?;
+        let result = cmd.output()?;
 
-        if result.code() != Some(0) {
+        if result.status.code() != Some(0) {
             bail!("Container start command failed")
         }
 
-        Ok(())
+        Ok(Box::new(AppleContainerHandle {
+            id: String::from_utf8_lossy(&result.stdout).to_string(),
+        }))
     }
 
-    fn exec(&self, container_id: &str, command: &str, env_vars: &[String]) -> anyhow::Result<()> {
+    fn exec(
+        &self,
+        container_handle: &dyn super::ContainerHandle,
+        command: Vec<&str>,
+        env_vars: &[String],
+    ) -> anyhow::Result<()> {
         let mut cmd = Command::new("container");
         cmd.arg("exec").arg("-it");
 
@@ -103,7 +121,7 @@ impl ContainerRuntime for AppleRuntime {
             cmd.arg("-e").arg(env_var);
         }
 
-        let result = cmd.arg(container_id).arg(command).status()?;
+        let result = cmd.arg(container_handle.id()).args(command).status()?;
 
         if result.code() != Some(0) {
             bail!("Container exec command failed")
@@ -112,7 +130,7 @@ impl ContainerRuntime for AppleRuntime {
         Ok(())
     }
 
-    fn list(&self) -> anyhow::Result<Vec<(String, String)>> {
+    fn list(&self) -> anyhow::Result<Vec<(String, Box<dyn super::ContainerHandle>)>> {
         let output = Command::new("container")
             .arg("list")
             .arg("--format")
@@ -123,7 +141,7 @@ impl ContainerRuntime for AppleRuntime {
 
         let containers: Vec<serde_json::Value> = serde_json::from_str(&stdout)?;
 
-        let result: Vec<(String, String)> = containers
+        let result: Vec<(String, Box<dyn super::ContainerHandle>)> = containers
             .iter()
             .map(|container| {
                 let name = container["configuration"]["labels"]["devcon"]
@@ -134,7 +152,8 @@ impl ContainerRuntime for AppleRuntime {
                     .as_str()
                     .unwrap_or_default()
                     .to_string();
-                (name, id)
+                let handle = AppleContainerHandle { id };
+                (name, Box::new(handle) as Box<dyn super::ContainerHandle>)
             })
             .collect();
 

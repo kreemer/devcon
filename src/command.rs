@@ -150,12 +150,7 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
     };
 
     let driver = ContainerDriver::new(runtime);
-    let result = driver.build(
-        devcontainer_workspace,
-        config.dotfiles_repository.as_deref(),
-        config.dotfiles_install_command.as_deref(),
-        &[],
-    );
+    let result = driver.build(devcontainer_workspace, &[]);
 
     if result.is_err() {
         println!("Error: {:?}", result.err());
@@ -209,7 +204,12 @@ pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
     };
 
     let driver = ContainerDriver::new(runtime);
-    driver.start(devcontainer_workspace, &[])?;
+    driver.start(
+        devcontainer_workspace,
+        config.dotfiles_repository.as_deref(),
+        config.dotfiles_install_command.as_deref(),
+        &[],
+    )?;
 
     Ok(())
 }

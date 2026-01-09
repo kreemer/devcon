@@ -40,6 +40,17 @@ impl DockerRuntime {
     }
 }
 
+/// Handle for a Docker container instance.
+pub struct DockerContainerHandle {
+    id: String,
+}
+
+impl super::ContainerHandle for DockerContainerHandle {
+    fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 impl ContainerRuntime for DockerRuntime {
     fn build(
         &self,
@@ -69,7 +80,7 @@ impl ContainerRuntime for DockerRuntime {
         volume_mount: &str,
         label: &str,
         env_vars: &[String],
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Box<dyn super::ContainerHandle>> {
         let mut cmd = Command::new("docker");
         cmd.arg("run")
             .arg("--rm")
@@ -86,16 +97,23 @@ impl ContainerRuntime for DockerRuntime {
 
         cmd.arg(image_tag);
 
-        let result = cmd.status()?;
+        let result = cmd.output()?;
 
-        if result.code() != Some(0) {
+        if result.status.code() != Some(0) {
             bail!("Docker run command failed")
         }
 
-        Ok(())
+        Ok(Box::new(DockerContainerHandle {
+            id: String::from_utf8_lossy(&result.stdout).to_string(),
+        }))
     }
 
-    fn exec(&self, container_id: &str, command: &str, env_vars: &[String]) -> anyhow::Result<()> {
+    fn exec(
+        &self,
+        container_handle: &dyn super::ContainerHandle,
+        command: Vec<&str>,
+        env_vars: &[String],
+    ) -> anyhow::Result<()> {
         let mut cmd = Command::new("docker");
         cmd.arg("exec").arg("-it");
 
@@ -103,7 +121,7 @@ impl ContainerRuntime for DockerRuntime {
             cmd.arg("-e").arg(env_var);
         }
 
-        let result = cmd.arg(container_id).arg(command).status()?;
+        let result = cmd.arg(container_handle.id()).args(command).status()?;
 
         if result.code() != Some(0) {
             bail!("Docker exec command failed")
@@ -112,7 +130,7 @@ impl ContainerRuntime for DockerRuntime {
         Ok(())
     }
 
-    fn list(&self) -> anyhow::Result<Vec<(String, String)>> {
+    fn list(&self) -> anyhow::Result<Vec<(String, Box<dyn super::ContainerHandle>)>> {
         let output = Command::new("docker")
             .arg("ps")
             .arg("--filter")
@@ -123,7 +141,7 @@ impl ContainerRuntime for DockerRuntime {
 
         let stdout = String::from_utf8_lossy(&output.stdout);
 
-        let mut result: Vec<(String, String)> = Vec::new();
+        let mut result: Vec<(String, Box<dyn super::ContainerHandle>)> = Vec::new();
 
         // Docker outputs one JSON object per line, not an array
         for line in stdout.lines() {
@@ -150,7 +168,8 @@ impl ContainerRuntime for DockerRuntime {
             let id = container["ID"].as_str().unwrap_or_default().to_string();
 
             if !devcon_name.is_empty() {
-                result.push((devcon_name, id));
+                let handle = DockerContainerHandle { id: id.clone() };
+                result.push((devcon_name, Box::new(handle)));
             }
         }
 
