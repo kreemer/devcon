@@ -262,9 +262,9 @@ impl Devcontainer {
     ///
     /// Returns an error if any additional feature cannot be parsed.
     pub fn merge_additional_features(
-        &mut self,
+        &self,
         additional_features: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<Vec<Feature>> {
         // Get set of existing feature URLs
         let existing_urls: Vec<String> = self
             .features
@@ -278,16 +278,17 @@ impl Devcontainer {
             })
             .collect();
 
+        let mut return_features = self.features.clone();
         // Add features that don't already exist
         for (url, options) in additional_features {
             if !existing_urls.contains(url) {
                 let feature = parse_feature::<serde::de::value::Error>(url, options.clone())
                     .map_err(|e| anyhow::anyhow!("Failed to parse additional feature: {}", e))?;
-                self.features.push(feature);
+                return_features.push(feature);
             }
         }
 
-        Ok(())
+        Ok(return_features)
     }
 }
 
