@@ -134,12 +134,7 @@ pub fn handle_config_command(create_if_missing: bool) -> anyhow::Result<()> {
 pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
     let config = Config::load()?;
 
-    let mut devcontainer_workspace = DevcontainerWorkspace::try_from(path)?;
-
-    // Merge additional features from config
-    devcontainer_workspace
-        .devcontainer
-        .merge_additional_features(&config.additional_features)?;
+    let devcontainer_workspace = DevcontainerWorkspace::try_from(path)?;
 
     // Create runtime based on config
     let runtime_name = config.resolve_runtime()?;

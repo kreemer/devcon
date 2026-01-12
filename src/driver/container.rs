@@ -123,8 +123,13 @@ impl ContainerDriver {
             "Building container in temporary directory: {}",
             directory.path().to_string_lossy()
         );
-        let processed_features =
-            process_features(&devcontainer_workspace.devcontainer.features, &directory)?;
+
+        // Merge additional features from config
+        let features = devcontainer_workspace
+            .devcontainer
+            .merge_additional_features(&self.config.additional_features)?;
+
+        let processed_features = process_features(&features, &directory)?;
         let mut feature_install = String::new();
 
         let mut i = 0;
