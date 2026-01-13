@@ -57,6 +57,7 @@ use std::fs::{self, File};
 use anyhow::bail;
 use minijinja::Environment;
 use tempfile::TempDir;
+use tracing::{debug, info, trace};
 
 use crate::{
     config::Config,
@@ -119,9 +120,23 @@ impl ContainerDriver {
         env_variables: &[String],
     ) -> anyhow::Result<()> {
         let directory = TempDir::new()?;
-        println!(
+        info!(
             "Building container in temporary directory: {}",
             directory.path().to_string_lossy()
+        );
+
+        trace!(
+            "Processing features for devcontainer at {:?}",
+            devcontainer_workspace.path
+        );
+
+        trace!(
+            "Using features of devcontainer: {:?}",
+            devcontainer_workspace.devcontainer.features
+        );
+        trace!(
+            "Adding additional features from config: {:?}",
+            self.config.additional_features
         );
 
         // Merge additional features from config
@@ -129,6 +144,7 @@ impl ContainerDriver {
             .devcontainer
             .merge_additional_features(&self.config.additional_features)?;
 
+        debug!("Final feature list: {:?}", features);
         let processed_features = process_features(&features, &directory)?;
         let mut feature_install = String::new();
 

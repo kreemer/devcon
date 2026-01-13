@@ -44,9 +44,11 @@
 
 use std::fs::{self, File};
 
-use anyhow::bail;
+use anyhow::{Ok, bail};
+use indicatif::ProgressBar;
 use serde_json::Value;
 use tempfile::TempDir;
+use tracing::info;
 
 use crate::devcontainer::Feature;
 
@@ -84,11 +86,21 @@ fn process_features<'a>(
     features: &'a [Feature],
     directory: &'a TempDir,
 ) -> anyhow::Result<Vec<FeatureProcessResult>> {
+    println!("Processing features..");
+    let bar = ProgressBar::new(u64::try_from(features.len())?);
     let mut result: Vec<FeatureProcessResult> = vec![];
     for feature in features {
+        match &feature.source {
+            crate::devcontainer::FeatureSource::Registry { registry, .. } => {
+                bar.println(format!("Processing feature {}", registry.name))
+            }
+            crate::devcontainer::FeatureSource::Local { .. } => todo!(),
+        }
         let feature_result = process_feature(feature, directory)?;
         result.push(feature_result);
+        bar.inc(1);
     }
+    bar.finish();
     Ok(result)
 }
 
@@ -163,6 +175,7 @@ fn download_feature<'a>(
     registry: &'a crate::devcontainer::FeatureRegistry,
     directory: &'a TempDir,
 ) -> anyhow::Result<String> {
+    info!("Processing feature: {}", registry.name);
     let feature_directory = directory.path().join(&registry.name);
     fs::create_dir_all(&feature_directory)?;
 

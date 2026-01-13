@@ -22,6 +22,9 @@
 
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
+use tracing::{Level, trace};
+use tracing_indicatif::IndicatifLayer;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::command::*;
 
@@ -30,7 +33,7 @@ mod config;
 mod devcontainer;
 mod driver;
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(
     name = "devcon",
     about = "A TUI application for managing and launching development containers",
@@ -38,11 +41,15 @@ mod driver;
     version = "0.2.4"
 )]
 struct Cli {
+    /// Turn debugging information on
+    #[arg(short, long, action = clap::ArgAction::Count)]
+    debug: u8,
+
     #[command(subcommand)]
     command: Commands,
 }
 
-#[derive(Subcommand)]
+#[derive(Subcommand, Debug)]
 enum Commands {
     /// Builds a development container for the specified path
     #[command(about = "Create a development container")]
@@ -91,7 +98,23 @@ enum Commands {
 }
 
 fn main() -> anyhow::Result<()> {
+    let indicatif_layer = IndicatifLayer::new();
     let cli = Cli::parse();
+    let level = match cli.debug {
+        0 => Level::WARN,
+        1 => Level::INFO,
+        2 => Level::DEBUG,
+        _ => Level::TRACE,
+    };
+
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_writer(indicatif_layer.get_stderr_writer()))
+        .with(indicatif_layer)
+        .with(tracing_subscriber::filter::LevelFilter::from_level(level))
+        .init();
+
+    trace!("Starting devcon with CLI args: {:?}", cli);
+
     match &cli.command {
         Commands::Build { path } => {
             handle_build_command(path.clone().unwrap_or(PathBuf::from(".").to_path_buf()))?;
