@@ -39,6 +39,8 @@ use std::{
     path::PathBuf,
 };
 
+use tracing::{debug, trace};
+
 use crate::{
     config::Config,
     devcontainer::DevcontainerWorkspace,
@@ -67,7 +69,9 @@ use crate::{
 pub fn handle_config_command(create_if_missing: bool) -> anyhow::Result<()> {
     let config_path = Config::get_config_path()?;
 
+    trace!("Config path {}", config_path.display());
     if !config_path.exists() && create_if_missing {
+        debug!("Creating new config file at {}", config_path.display());
         let config_dir = config_path
             .parent()
             .ok_or_else(|| anyhow::anyhow!("Failed to get config directory"))?;
@@ -134,10 +138,12 @@ pub fn handle_config_command(create_if_missing: bool) -> anyhow::Result<()> {
 pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
     let config = Config::load()?;
 
+    trace!("Config loaded {:?}", config);
     let devcontainer_workspace = DevcontainerWorkspace::try_from(path)?;
 
     // Create runtime based on config
     let runtime_name = config.resolve_runtime()?;
+    debug!("Using runtime {:?}", runtime_name);
     let runtime: Box<dyn crate::driver::runtime::ContainerRuntime> = match runtime_name.as_str() {
         "docker" => Box::new(DockerRuntime::new()),
         "apple" => Box::new(AppleRuntime::new()),
@@ -145,11 +151,14 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
     };
 
     let driver = ContainerDriver::new(config, runtime);
+
     let result = driver.build(devcontainer_workspace, &[]);
 
     if result.is_err() {
-        println!("Error: {:?}", result.err());
-        anyhow::bail!("Failed to build the development container.");
+        anyhow::bail!(
+            "Failed to build the development container. Error: {:?}",
+            result.err()
+        );
     }
 
     Ok(())
@@ -188,10 +197,12 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
 /// ```
 pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
     let config = Config::load()?;
+    trace!("Config loaded {:?}", config);
     let devcontainer_workspace = DevcontainerWorkspace::try_from(path.clone())?;
 
     // Create runtime based on config
     let runtime_name = config.resolve_runtime()?;
+    debug!("Using runtime {:?}", runtime_name);
     let runtime: Box<dyn crate::driver::runtime::ContainerRuntime> = match runtime_name.as_str() {
         "docker" => Box::new(DockerRuntime::new()),
         "apple" => Box::new(AppleRuntime::new()),
@@ -216,10 +227,12 @@ pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
 /// Currently always returns `Ok(())` as it's not implemented.
 pub fn handle_shell_command(path: PathBuf, _env: &[String]) -> anyhow::Result<()> {
     let config = Config::load()?;
+    trace!("Config loaded {:?}", config);
     let devcontainer_workspace = DevcontainerWorkspace::try_from(path.clone())?;
 
     // Create runtime based on config
     let runtime_name = config.resolve_runtime()?;
+    debug!("Using runtime {:?}", runtime_name);
     let runtime: Box<dyn crate::driver::runtime::ContainerRuntime> = match runtime_name.as_str() {
         "docker" => Box::new(DockerRuntime::new()),
         "apple" => Box::new(AppleRuntime::new()),
