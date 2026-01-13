@@ -229,7 +229,8 @@ FROM feature_last AS dotfiles_setup
 FROM dotfiles_setup
 USER {{ remote_user }}
 WORKDIR /workspaces/{{ workspace_name }}
-CMD ["sleep", "infinity"]
+ENTRYPOINT [ "/bin/sh" ]
+CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sleep 1 \u0026 wait $!; do :; done", "-"]
 "#,
         )?;
 
