@@ -33,7 +33,7 @@ use std::{
 
 use anyhow::bail;
 use indicatif::ProgressBar;
-use tracing::trace;
+use tracing::{info, trace};
 
 use super::ContainerRuntime;
 

@@ -52,18 +52,87 @@
 //! # }
 //! ```
 
+use std::collections::HashMap;
 use std::fs::{self, File};
+use std::io::{BufRead, BufReader};
+use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 use anyhow::bail;
 use minijinja::Environment;
+use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
-use tracing::{debug, info, trace};
+use tracing::{debug, info, trace, warn};
 
 use crate::{
     config::Config,
-    devcontainer::{DevcontainerWorkspace, LifecycleCommand},
+    devcontainer::{DevcontainerWorkspace, LifecycleCommand, OnAutoForward, PortAttributes},
     driver::{process_features, runtime::ContainerRuntime},
 };
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(tag = "type")]
+enum AgentMessage {
+    PortDiscovered { port: u16 },
+    PortClosed { port: u16 },
+    PortForwarded { port: u16, host_port: u16 },
+    ListPorts,
+    PortList { ports: Vec<u16> },
+    Shutdown,
+}
+
+/// Manages dynamic port forwarding for a container
+#[derive(Clone)]
+struct PortForwardingManager {
+    forwarded_ports: Arc<Mutex<HashMap<u16, u16>>>, // container_port -> host_port
+    port_attributes: HashMap<String, PortAttributes>,
+}
+
+impl PortForwardingManager {
+    fn new(port_attributes: Option<HashMap<String, PortAttributes>>) -> Self {
+        Self {
+            forwarded_ports: Arc::new(Mutex::new(HashMap::new())),
+            port_attributes: port_attributes.unwrap_or_default(),
+        }
+    }
+
+    fn is_port_forwarded(&self, port: u16) -> bool {
+        self.forwarded_ports.lock().unwrap().contains_key(&port)
+    }
+
+    fn add_forwarded_port(&self, container_port: u16, host_port: u16) {
+        self.forwarded_ports
+            .lock()
+            .unwrap()
+            .insert(container_port, host_port);
+    }
+
+    fn should_forward_port(&self, port: u16) -> bool {
+        // Check if port has attributes with "ignore" action
+        let port_key = port.to_string();
+        if let Some(attrs) = self.port_attributes.get(&port_key) {
+            if let Some(OnAutoForward::Ignore) = attrs.on_auto_forward {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn get_port_label(&self, port: u16) -> Option<String> {
+        let port_key = port.to_string();
+        self.port_attributes
+            .get(&port_key)
+            .and_then(|attrs| attrs.label.clone())
+    }
+
+    fn get_on_auto_forward_action(&self, port: u16) -> Option<OnAutoForward> {
+        let port_key = port.to_string();
+        self.port_attributes
+            .get(&port_key)
+            .and_then(|attrs| attrs.on_auto_forward.clone())
+    }
+}
 
 /// Driver for managing container build and runtime operations.
 ///
@@ -79,6 +148,7 @@ impl ContainerDriver {
     pub fn new(config: Config, runtime: Box<dyn ContainerRuntime>) -> Self {
         Self { config, runtime }
     }
+
     /// Builds a container image from the devcontainer configuration.
     ///
     /// This method:
