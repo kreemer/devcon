@@ -483,19 +483,6 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             None => { /* No onCreateCommand specified */ }
         };
 
-        // Start the devcon-agent in the background
-        info!("Starting devcon-agent in the background...");
-        self.runtime.exec(
-            handle.as_ref(),
-            vec![
-                "bash",
-                "-c",
-                "nohup /opt/devcon-agent > /tmp/devcon-agent.out 2> /tmp/devcon-agent.err < /dev/null &",
-            ],
-            &[],
-        )?;
-        info!("devcon-agent started successfully");
-
         // Start listener for agent messages
         self.start_agent_listener(handle)?;
 
@@ -692,7 +679,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             .runtime
             .tail_file(container_handle.as_ref(), "/tmp/devcon-agent.out")?;
 
-        thread::spawn(move || {
+        let handle = thread::spawn(move || {
             // Give the agent a moment to start
             std::thread::sleep(std::time::Duration::from_millis(500));
 
@@ -759,6 +746,12 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
 
             debug!("Agent listener thread exiting");
         });
+
+        let result = handle.join();
+        match result {
+            Ok(_) => info!("Agent listener thread exited normally"),
+            Err(e) => warn!("Agent listener thread panicked: {:?}", e),
+        }
 
         Ok(())
     }

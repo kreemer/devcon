@@ -27,11 +27,17 @@ impl Default for AgentConfig {
         let env = Environment::new();
         let template = env
             .template_from_str(
-                r#"
+                r###"
 #!/bin/bash
 
 set -e
 echo "Installing DevCon Agent..."
+
+echo "Install protoc..."
+PB_REL="https://github.com/protocolbuffers/protobuf/releases"
+curl -LO $PB_REL/download/v30.2/protoc-30.2-linux-x86_64.zip
+unzip protoc-30.2-linux-x86_64.zip -d $HOME/.local
+export PATH="$PATH:$HOME/.local/bin"
 
 if [ ! -f $HOME/.cargo/env ]; then
     echo "Installing Rust toolchain..."
@@ -45,7 +51,10 @@ git checkout support_reference
 cargo b --release --workspace --bin devcon-agent
 mv target/release/devcon-agent /usr/local/bin/devcon-agent
 rm -rf /tmp/devcon
-"#,
+
+touch /tmp/devcon-agent.out
+echo "DevCon Agent installed successfully."
+"###,
             )
             .expect("Failed to create template");
 
