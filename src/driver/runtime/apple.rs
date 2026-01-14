@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use indicatif::ProgressBar;
-use tracing::trace;
+use tracing::{info, trace};
 
 use super::ContainerRuntime;
 
