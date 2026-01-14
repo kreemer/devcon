@@ -65,6 +65,8 @@ use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tracing::{debug, info, trace, warn};
 
+use crate::devcontainer::{Feature, FeatureSource};
+use crate::driver::agent::{self, AgentConfig};
 use crate::{
     config::Config,
     devcontainer::{DevcontainerWorkspace, LifecycleCommand, OnAutoForward, PortAttributes},
@@ -80,58 +82,6 @@ enum AgentMessage {
     ListPorts,
     PortList { ports: Vec<u16> },
     Shutdown,
-}
-
-/// Manages dynamic port forwarding for a container
-#[derive(Clone)]
-struct PortForwardingManager {
-    forwarded_ports: Arc<Mutex<HashMap<u16, u16>>>, // container_port -> host_port
-    port_attributes: HashMap<String, PortAttributes>,
-}
-
-impl PortForwardingManager {
-    fn new(port_attributes: Option<HashMap<String, PortAttributes>>) -> Self {
-        Self {
-            forwarded_ports: Arc::new(Mutex::new(HashMap::new())),
-            port_attributes: port_attributes.unwrap_or_default(),
-        }
-    }
-
-    fn is_port_forwarded(&self, port: u16) -> bool {
-        self.forwarded_ports.lock().unwrap().contains_key(&port)
-    }
-
-    fn add_forwarded_port(&self, container_port: u16, host_port: u16) {
-        self.forwarded_ports
-            .lock()
-            .unwrap()
-            .insert(container_port, host_port);
-    }
-
-    fn should_forward_port(&self, port: u16) -> bool {
-        // Check if port has attributes with "ignore" action
-        let port_key = port.to_string();
-        if let Some(attrs) = self.port_attributes.get(&port_key) {
-            if let Some(OnAutoForward::Ignore) = attrs.on_auto_forward {
-                return false;
-            }
-        }
-        true
-    }
-
-    fn get_port_label(&self, port: u16) -> Option<String> {
-        let port_key = port.to_string();
-        self.port_attributes
-            .get(&port_key)
-            .and_then(|attrs| attrs.label.clone())
-    }
-
-    fn get_on_auto_forward_action(&self, port: u16) -> Option<OnAutoForward> {
-        let port_key = port.to_string();
-        self.port_attributes
-            .get(&port_key)
-            .and_then(|attrs| attrs.on_auto_forward.clone())
-    }
 }
 
 /// Driver for managing container build and runtime operations.
@@ -210,9 +160,16 @@ impl ContainerDriver {
         );
 
         // Merge additional features from config
-        let features = devcontainer_workspace
+        let mut features = devcontainer_workspace
             .devcontainer
             .merge_additional_features(&self.config.additional_features)?;
+
+        // Add agent installation feature
+        let agent_path = agent::Agent::new(AgentConfig::default()).generate()?;
+        features.push(Feature {
+            source: FeatureSource::Local { path: agent_path },
+            options: serde_json::json!({}),
+        });
 
         debug!("Final feature list: {:?}", features);
         let processed_features = process_features(&features, &directory)?;
@@ -225,9 +182,12 @@ impl ContainerDriver {
                     registry_type: _,
                     registry,
                 } => &registry.name,
-                crate::devcontainer::FeatureSource::Local { path } => {
-                    &path.to_string_lossy().to_string()
-                }
+                crate::devcontainer::FeatureSource::Local { path } => &path
+                    .canonicalize()?
+                    .file_name()
+                    .unwrap()
+                    .to_string_lossy()
+                    .to_string(),
             };
             if i == 0 {
                 feature_install.push_str(&format!("FROM {} AS feature_0 \n", "base"));

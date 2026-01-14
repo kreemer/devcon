@@ -42,16 +42,21 @@
 //! - **Registry** - Downloaded from OCI-compliant registries like ghcr.io
 //! - **Local** - Loaded from the local filesystem (not yet implemented)
 
-use std::fs::{self, File};
+use std::fs::{self, File, copy};
 
 use anyhow::{Ok, bail};
+use dircpy::copy_dir;
 use indicatif::ProgressBar;
 use serde_json::Value;
 use tempfile::TempDir;
 use tracing::info;
 
-use crate::devcontainer::Feature;
+use crate::devcontainer::{
+    Feature,
+    FeatureSource::{Local, Registry},
+};
 
+pub mod agent;
 pub mod container;
 pub mod runtime;
 
@@ -91,10 +96,17 @@ fn process_features<'a>(
     let mut result: Vec<FeatureProcessResult> = vec![];
     for feature in features {
         match &feature.source {
-            crate::devcontainer::FeatureSource::Registry { registry, .. } => {
+            Registry { registry, .. } => {
                 bar.println(format!("Processing feature {}", registry.name))
             }
-            crate::devcontainer::FeatureSource::Local { .. } => todo!(),
+            Local { path } => bar.println(format!(
+                "Processing feature {}",
+                path.canonicalize()?
+                    .file_name()
+                    .ok_or_else(|| anyhow::anyhow!("Could not get basename of directory"))?
+                    .to_string_lossy()
+                    .to_string()
+            )),
         }
         let feature_result = process_feature(feature, directory)?;
         result.push(feature_result);
@@ -109,13 +121,11 @@ fn process_feature<'a>(
     directory: &'a TempDir,
 ) -> anyhow::Result<FeatureProcessResult> {
     let relative_path = match &feature.source {
-        crate::devcontainer::FeatureSource::Registry {
+        Registry {
             registry_type,
             registry,
         } => download_feature(registry_type, registry, directory),
-        crate::devcontainer::FeatureSource::Local { path: _ } => {
-            todo!("Local feature source not yet implemented")
-        }
+        Local { path } => local_feature(path, directory),
     }?;
 
     // Read devcontainer-feature.json if it exists to get default options
@@ -168,6 +178,20 @@ fn process_feature<'a>(
         options: feature_options,
         relative_path,
     })
+}
+
+fn local_feature(path: &std::path::PathBuf, directory: &TempDir) -> Result<String, anyhow::Error> {
+    if !fs::exists(path)? {
+        bail!("Local feature path does not exist: {}", path.display());
+    }
+
+    let canonical_path = fs::canonicalize(path)?;
+    let name = canonical_path
+        .file_name()
+        .ok_or_else(|| anyhow::anyhow!("Failed to get feature directory name"))?;
+
+    copy_dir(canonical_path.as_path(), directory.path().join(name))?;
+    Ok(name.display().to_string())
 }
 
 fn download_feature<'a>(
