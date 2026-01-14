@@ -395,7 +395,8 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
                     .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
             })?,
             Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
-                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, cmd);
+                let cmd_str = cmd.to_command_string();
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, &cmd_str);
                 self.runtime
                     .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
             })?,
@@ -434,7 +435,8 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
                     .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
             })?,
             Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
-                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, cmd);
+                let cmd_str = cmd.to_command_string();
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, &cmd_str);
                 self.runtime
                     .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
             })?,
@@ -453,7 +455,8 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
                     .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
             })?,
             Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
-                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, cmd);
+                let cmd_str = cmd.to_command_string();
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, &cmd_str);
                 self.runtime
                     .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
             })?,
@@ -560,7 +563,8 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
                 )
             })?,
             Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
-                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, cmd);
+                let cmd_str = cmd.to_command_string();
+                let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, &cmd_str);
                 self.runtime.exec(
                     handle.as_ref().unwrap().as_ref(),
                     vec!["bash", "-c", "-i", &wrapped_cmd],

@@ -56,6 +56,7 @@ use std::path::PathBuf;
 use anyhow::bail;
 use serde::Deserialize;
 use serde::de;
+use serde_json::Value;
 
 /// Represents a workspace containing a devcontainer configuration.
 ///
@@ -133,7 +134,204 @@ pub enum LifecycleCommand {
     /// Multiple commands as an array
     Array(Vec<String>),
     /// Named commands as an object
-    Object(HashMap<String, String>),
+    Object(HashMap<String, LifecycleCommandValue>),
+}
+
+/// Represents a value in a lifecycle command object that can be a string or array
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum LifecycleCommandValue {
+    String(String),
+    Array(Vec<String>),
+}
+
+impl LifecycleCommandValue {
+    /// Convert to a shell command string
+    pub fn to_command_string(&self) -> String {
+        match self {
+            LifecycleCommandValue::String(s) => s.clone(),
+            LifecycleCommandValue::Array(arr) => arr.join(" && "),
+        }
+    }
+}
+
+/// Represents a port forwarding configuration
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum ForwardPort {
+    /// Simple port number
+    Port(u16),
+    /// Host:port format
+    HostPort(String),
+}
+
+/// Port attributes for forwarded ports
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PortAttributes {
+    pub on_auto_forward: Option<OnAutoForward>,
+    pub elevate_if_needed: Option<bool>,
+    pub label: Option<String>,
+    pub require_local_port: Option<bool>,
+    pub protocol: Option<PortProtocol>,
+}
+
+/// Action to take when a port is auto-forwarded
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum OnAutoForward {
+    Notify,
+    OpenBrowser,
+    OpenBrowserOnce,
+    OpenPreview,
+    Silent,
+    Ignore,
+}
+
+/// Protocol for port forwarding
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PortProtocol {
+    Http,
+    Https,
+}
+
+/// Mount configuration
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum Mount {
+    /// String format for mount
+    String(String),
+    /// Structured mount
+    Structured(StructuredMount),
+}
+
+/// Structured mount configuration
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct StructuredMount {
+    #[serde(rename = "type")]
+    pub mount_type: MountType,
+    pub source: Option<String>,
+    pub target: String,
+}
+
+/// Type of mount
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MountType {
+    Bind,
+    Volume,
+}
+
+/// Build configuration for Dockerfile-based containers
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BuildConfig {
+    pub dockerfile: Option<String>,
+    pub context: Option<String>,
+    pub target: Option<String>,
+    pub args: Option<HashMap<String, String>>,
+    pub cache_from: Option<CacheFrom>,
+    pub options: Option<Vec<String>>,
+}
+
+/// Cache from configuration
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum CacheFrom {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+/// Docker Compose configuration
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ComposeConfig {
+    pub docker_compose_file: ComposeFile,
+    pub service: String,
+    pub run_services: Option<Vec<String>>,
+}
+
+/// Docker Compose file reference
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum ComposeFile {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+/// Application port configuration
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum AppPort {
+    Single(AppPortValue),
+    Multiple(Vec<AppPortValue>),
+}
+
+/// Individual app port value
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum AppPortValue {
+    Port(u16),
+    Mapping(String),
+}
+
+/// Shutdown action when disconnecting
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ShutdownAction {
+    None,
+    StopContainer,
+    StopCompose,
+}
+
+/// User environment probe setting
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum UserEnvProbe {
+    None,
+    LoginShell,
+    LoginInteractiveShell,
+    InteractiveShell,
+}
+
+/// Wait for command setting
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WaitFor {
+    InitializeCommand,
+    OnCreateCommand,
+    UpdateContentCommand,
+    PostCreateCommand,
+    PostStartCommand,
+}
+
+/// Host requirements
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HostRequirements {
+    pub cpus: Option<u32>,
+    pub memory: Option<String>,
+    pub storage: Option<String>,
+    pub gpu: Option<GpuRequirement>,
+}
+
+/// GPU requirement
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum GpuRequirement {
+    Boolean(bool),
+    Optional(String), // "optional"
+    Detailed(DetailedGpuRequirement),
+}
+
+/// Detailed GPU requirements
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DetailedGpuRequirement {
+    pub cores: Option<u32>,
+    pub memory: Option<String>,
 }
 
 /// Represents a devcontainer.json configuration.
@@ -143,28 +341,124 @@ pub enum LifecycleCommand {
 ///
 /// # Fields
 ///
+/// ## General Properties
 /// * `name` - Optional name for the container (defaults to directory name if not set)
-/// * `image` - The Docker base image to use
 /// * `features` - List of features to install in the container
-/// * `remote_user` - The user to use when connecting to the container
+/// * `override_feature_install_order` - Custom order for feature installation
+/// * `forward_ports` - Ports to forward from container to host
+/// * `ports_attributes` - Attributes for specific ports or port ranges
+/// * `other_ports_attributes` - Default attributes for unspecified ports
+///
+/// ## Image/Build Configuration
+/// * `image` - The Docker base image to use
+/// * `build` - Build configuration for Dockerfile-based containers
+/// * `dockerfile` - Path to Dockerfile (deprecated, use build.dockerfile)
+/// * `context` - Build context path (deprecated, use build.context)
+///
+/// ## Docker Compose Configuration
+/// * `docker_compose_file` - Docker Compose file(s) to use
+/// * `service` - Service name in docker-compose.yml
+/// * `run_services` - Services to start
+///
+/// ## Container Configuration
+/// * `workspace_folder` - Path to workspace inside container
+/// * `workspace_mount` - Custom workspace mount configuration
+/// * `mounts` - Additional mount points
+/// * `run_args` - Additional arguments for docker run
+/// * `app_port` - Application ports to expose
+/// * `override_command` - Whether to override the default command
+/// * `shutdown_action` - Action when disconnecting from container
+///
+/// ## User Configuration
+/// * `remote_user` - User for spawning processes in container
+/// * `container_user` - User the container starts with
+/// * `update_remote_user_uid` - Whether to update user UID/GID on Linux
+///
+/// ## Environment
+/// * `container_env` - Environment variables for the container
+/// * `remote_env` - Environment variables for remote processes
+///
+/// ## Security and Capabilities
+/// * `init` - Whether to use init process
+/// * `privileged` - Run container in privileged mode
+/// * `cap_add` - Linux capabilities to add
+/// * `security_opt` - Security options
+///
+/// ## Lifecycle Commands
+/// * `initialize_command` - Command to run before anything else (on host)
 /// * `on_create_command` - Command to run when creating the container
 /// * `update_content_command` - Command to run after updating content
 /// * `post_create_command` - Command to run after creating the container
 /// * `post_start_command` - Command to run after starting the container
 /// * `post_attach_command` - Command to run after attaching to the container
+/// * `wait_for` - Which lifecycle command to wait for
+/// * `user_env_probe` - How to probe user environment
+///
+/// ## Advanced
+/// * `host_requirements` - Minimum host hardware requirements
+/// * `customizations` - Tool-specific customizations
+/// * `additional_properties` - Other unspecified properties
 #[derive(Debug, Clone)]
 pub struct Devcontainer {
+    // General properties
     pub name: Option<String>,
-    pub image: String,
     pub features: Vec<Feature>,
+    pub override_feature_install_order: Option<Vec<String>>,
+    pub forward_ports: Option<Vec<ForwardPort>>,
+    pub ports_attributes: Option<HashMap<String, PortAttributes>>,
+    pub other_ports_attributes: Option<PortAttributes>,
+
+    // Image/Build configuration
+    pub image: Option<String>,
+    pub build: Option<BuildConfig>,
+    #[deprecated(note = "Use build.dockerfile instead")]
+    pub dockerfile: Option<String>,
+    #[deprecated(note = "Use build.context instead")]
+    pub context: Option<String>,
+
+    // Docker Compose configuration
+    pub docker_compose_file: Option<ComposeFile>,
+    pub service: Option<String>,
+    pub run_services: Option<Vec<String>>,
+
+    // Container configuration
+    pub workspace_folder: Option<String>,
+    pub workspace_mount: Option<String>,
+    pub mounts: Option<Vec<Mount>>,
+    pub run_args: Option<Vec<String>>,
+    pub app_port: Option<AppPort>,
+    pub override_command: Option<bool>,
+    pub shutdown_action: Option<ShutdownAction>,
+
+    // User configuration
     pub remote_user: Option<String>,
     pub container_user: Option<String>,
+    pub update_remote_user_uid: Option<bool>,
+
+    // Environment
+    pub container_env: Option<HashMap<String, String>>,
+    pub remote_env: Option<HashMap<String, Option<String>>>,
+
+    // Security and capabilities
+    pub init: Option<bool>,
+    pub privileged: Option<bool>,
+    pub cap_add: Option<Vec<String>>,
+    pub security_opt: Option<Vec<String>>,
+
+    // Lifecycle commands
+    pub initialize_command: Option<LifecycleCommand>,
     pub on_create_command: Option<LifecycleCommand>,
-    #[allow(dead_code)]
     pub update_content_command: Option<LifecycleCommand>,
     pub post_create_command: Option<LifecycleCommand>,
     pub post_start_command: Option<LifecycleCommand>,
     pub post_attach_command: Option<LifecycleCommand>,
+    pub wait_for: Option<WaitFor>,
+    pub user_env_probe: Option<UserEnvProbe>,
+
+    // Advanced
+    pub host_requirements: Option<HostRequirements>,
+    pub customizations: Option<HashMap<String, Value>>,
+    pub additional_properties: Option<HashMap<String, Value>>,
 }
 
 impl<'de> Deserialize<'de> for Devcontainer {
@@ -173,26 +467,72 @@ impl<'de> Deserialize<'de> for Devcontainer {
         D: serde::Deserializer<'de>,
     {
         #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
         struct DevcontainerHelper {
+            // General properties
             name: Option<String>,
-            image: String,
             #[serde(default)]
             #[serde(deserialize_with = "deserialize_features_map")]
             features: Vec<(String, serde_json::Value)>,
-            #[serde(rename = "remoteUser")]
+            override_feature_install_order: Option<Vec<String>>,
+            forward_ports: Option<Vec<ForwardPort>>,
+            ports_attributes: Option<HashMap<String, PortAttributes>>,
+            other_ports_attributes: Option<PortAttributes>,
+
+            // Image/Build configuration
+            image: Option<String>,
+            build: Option<BuildConfig>,
+            #[serde(rename = "dockerFile")]
+            dockerfile: Option<String>,
+            context: Option<String>,
+
+            // Docker Compose configuration
+            docker_compose_file: Option<ComposeFile>,
+            service: Option<String>,
+            run_services: Option<Vec<String>>,
+
+            // Container configuration
+            workspace_folder: Option<String>,
+            workspace_mount: Option<String>,
+            mounts: Option<Vec<Mount>>,
+            run_args: Option<Vec<String>>,
+            app_port: Option<AppPort>,
+            override_command: Option<bool>,
+            shutdown_action: Option<ShutdownAction>,
+
+            // User configuration
             remote_user: Option<String>,
-            #[serde(rename = "containerUser")]
             container_user: Option<String>,
-            #[serde(rename = "onCreateCommand")]
+            #[serde(rename = "updateRemoteUserUID")]
+            update_remote_user_uid: Option<bool>,
+
+            // Environment
+            container_env: Option<HashMap<String, String>>,
+            remote_env: Option<HashMap<String, Option<String>>>,
+
+            // Security and capabilities
+            init: Option<bool>,
+            privileged: Option<bool>,
+            cap_add: Option<Vec<String>>,
+            security_opt: Option<Vec<String>>,
+
+            // Lifecycle commands
+            initialize_command: Option<LifecycleCommand>,
             on_create_command: Option<LifecycleCommand>,
-            #[serde(rename = "updateContentCommand")]
             update_content_command: Option<LifecycleCommand>,
-            #[serde(rename = "postCreateCommand")]
             post_create_command: Option<LifecycleCommand>,
-            #[serde(rename = "postStartCommand")]
             post_start_command: Option<LifecycleCommand>,
-            #[serde(rename = "postAttachCommand")]
             post_attach_command: Option<LifecycleCommand>,
+            wait_for: Option<WaitFor>,
+            user_env_probe: Option<UserEnvProbe>,
+
+            // Advanced
+            host_requirements: Option<HostRequirements>,
+            customizations: Option<HashMap<String, Value>>,
+
+            // Catch-all for additional properties
+            #[serde(flatten)]
+            additional_properties: Option<HashMap<String, Value>>,
         }
 
         let helper = DevcontainerHelper::deserialize(deserializer)?;
@@ -204,16 +544,63 @@ impl<'de> Deserialize<'de> for Devcontainer {
             .collect();
 
         Ok(Devcontainer {
+            // General properties
             name: helper.name,
-            image: helper.image,
             features: features?,
+            override_feature_install_order: helper.override_feature_install_order,
+            forward_ports: helper.forward_ports,
+            ports_attributes: helper.ports_attributes,
+            other_ports_attributes: helper.other_ports_attributes,
+
+            // Image/Build configuration
+            image: helper.image,
+            build: helper.build,
+            dockerfile: helper.dockerfile,
+            context: helper.context,
+
+            // Docker Compose configuration
+            docker_compose_file: helper.docker_compose_file,
+            service: helper.service,
+            run_services: helper.run_services,
+
+            // Container configuration
+            workspace_folder: helper.workspace_folder,
+            workspace_mount: helper.workspace_mount,
+            mounts: helper.mounts,
+            run_args: helper.run_args,
+            app_port: helper.app_port,
+            override_command: helper.override_command,
+            shutdown_action: helper.shutdown_action,
+
+            // User configuration
             remote_user: helper.remote_user,
             container_user: helper.container_user,
+            update_remote_user_uid: helper.update_remote_user_uid,
+
+            // Environment
+            container_env: helper.container_env,
+            remote_env: helper.remote_env,
+
+            // Security and capabilities
+            init: helper.init,
+            privileged: helper.privileged,
+            cap_add: helper.cap_add,
+            security_opt: helper.security_opt,
+
+            // Lifecycle commands
+            initialize_command: helper.initialize_command,
             on_create_command: helper.on_create_command,
             update_content_command: helper.update_content_command,
             post_create_command: helper.post_create_command,
             post_start_command: helper.post_start_command,
             post_attach_command: helper.post_attach_command,
+            wait_for: helper.wait_for,
+            user_env_probe: helper.user_env_probe,
+
+            // Advanced
+            host_requirements: helper.host_requirements,
+            customizations: helper.customizations,
+            additional_properties: helper.additional_properties,
         })
     }
 }
@@ -483,6 +870,7 @@ mod tests {
         let devcontainer: Devcontainer = serde_json::from_str(feature_json).unwrap();
 
         assert_eq!(devcontainer.name.as_deref(), Some("test"));
+        assert_eq!(devcontainer.image.as_deref(), Some("ubuntu:20.04"));
         assert_eq!(devcontainer.features.len(), 1);
         let feature = &devcontainer.features[0];
         match &feature.source {
@@ -783,16 +1171,22 @@ mod tests {
     }
 
     #[test]
-    fn test_missing_image_field() {
+    fn test_dockerfile_build() {
         let feature_json = r#"
         {
             "name": "test",
-            "features": {}
+            "build": {
+                "dockerfile": "Dockerfile",
+                "context": ".."
+            }
         }
         "#;
 
-        let result: Result<Devcontainer, _> = serde_json::from_str(feature_json);
-        assert!(result.is_err());
+        let devcontainer: Devcontainer = serde_json::from_str(feature_json).unwrap();
+        assert!(devcontainer.build.is_some());
+        let build = devcontainer.build.unwrap();
+        assert_eq!(build.dockerfile.as_deref(), Some("Dockerfile"));
+        assert_eq!(build.context.as_deref(), Some(".."));
     }
 
     #[test]
@@ -806,7 +1200,7 @@ mod tests {
 
         let devcontainer = Devcontainer::try_from(content.to_string()).unwrap();
         assert_eq!(devcontainer.name.as_deref(), Some("test"));
-        assert_eq!(devcontainer.image, "ubuntu:20.04");
+        assert_eq!(devcontainer.image.as_deref(), Some("ubuntu:20.04"));
     }
 
     #[test]
@@ -837,8 +1231,8 @@ mod tests {
 
         assert_eq!(devcontainer.name.as_deref(), Some("complex-test"));
         assert_eq!(
-            devcontainer.image,
-            "mcr.microsoft.com/devcontainers/base:ubuntu"
+            devcontainer.image.as_deref(),
+            Some("mcr.microsoft.com/devcontainers/base:ubuntu")
         );
         assert_eq!(devcontainer.features.len(), 3);
         assert_eq!(devcontainer.remote_user.as_deref(), Some("vscode"));
@@ -926,13 +1320,333 @@ mod tests {
         let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
         assert!(devcontainer.on_create_command.is_some());
 
-        let commands = match devcontainer.on_create_command {
-            Some(LifecycleCommand::Object(map)) => map.values().cloned().collect::<Vec<String>>(),
+        match devcontainer.on_create_command {
+            Some(LifecycleCommand::Object(map)) => {
+                assert_eq!(map.len(), 2);
+                assert!(map.contains_key("install"));
+                assert!(map.contains_key("build"));
+            }
             _ => unreachable!("Expected Object command"),
-        };
-        assert_eq!(commands.len(), 2);
-        assert!(commands.contains(&"npm install".to_string()));
-        assert!(commands.contains(&"npm run build".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_docker_compose_config() {
+        let json = r#"
+        {
+            "name": "test",
+            "dockerComposeFile": "docker-compose.yml",
+            "service": "app",
+            "workspaceFolder": "/workspace",
+            "runServices": ["db", "cache"]
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.docker_compose_file.is_some());
+        assert_eq!(devcontainer.service.as_deref(), Some("app"));
+        assert_eq!(devcontainer.workspace_folder.as_deref(), Some("/workspace"));
+        assert_eq!(devcontainer.run_services.as_ref().map(|s| s.len()), Some(2));
+    }
+
+    #[test]
+    fn test_port_forwarding() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "forwardPorts": [3000, "8080:8080"],
+            "portsAttributes": {
+                "3000": {
+                    "label": "Application",
+                    "onAutoForward": "notify"
+                }
+            }
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.forward_ports.is_some());
+        let ports = devcontainer.forward_ports.unwrap();
+        assert_eq!(ports.len(), 2);
+
+        assert!(devcontainer.ports_attributes.is_some());
+        let attrs = devcontainer.ports_attributes.unwrap();
+        assert!(attrs.contains_key("3000"));
+    }
+
+    #[test]
+    fn test_mounts() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "mounts": [
+                "source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind",
+                {
+                    "type": "volume",
+                    "source": "myvolume",
+                    "target": "/data"
+                }
+            ]
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.mounts.is_some());
+        let mounts = devcontainer.mounts.unwrap();
+        assert_eq!(mounts.len(), 2);
+    }
+
+    #[test]
+    fn test_container_env() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "containerEnv": {
+                "MY_VAR": "value",
+                "ANOTHER_VAR": "another_value"
+            },
+            "remoteEnv": {
+                "PATH": "/usr/local/bin:${PATH}",
+                "REMOVE_ME": null
+            }
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.container_env.is_some());
+        let env = devcontainer.container_env.unwrap();
+        assert_eq!(env.get("MY_VAR").map(|s| s.as_str()), Some("value"));
+
+        assert!(devcontainer.remote_env.is_some());
+        let remote_env = devcontainer.remote_env.unwrap();
+        assert!(remote_env.contains_key("PATH"));
+        assert_eq!(remote_env.get("REMOVE_ME"), Some(&None));
+    }
+
+    #[test]
+    fn test_security_options() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "init": true,
+            "privileged": true,
+            "capAdd": ["SYS_PTRACE"],
+            "securityOpt": ["seccomp=unconfined"]
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert_eq!(devcontainer.init, Some(true));
+        assert_eq!(devcontainer.privileged, Some(true));
+        assert!(devcontainer.cap_add.is_some());
+        assert!(devcontainer.security_opt.is_some());
+    }
+
+    #[test]
+    fn test_host_requirements() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "hostRequirements": {
+                "cpus": 4,
+                "memory": "8gb",
+                "storage": "32gb",
+                "gpu": true
+            }
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.host_requirements.is_some());
+        let reqs = devcontainer.host_requirements.unwrap();
+        assert_eq!(reqs.cpus, Some(4));
+        assert_eq!(reqs.memory.as_deref(), Some("8gb"));
+        assert_eq!(reqs.storage.as_deref(), Some("32gb"));
+        assert!(reqs.gpu.is_some());
+    }
+
+    #[test]
+    fn test_customizations() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "customizations": {
+                "vscode": {
+                    "extensions": ["ms-python.python"],
+                    "settings": {
+                        "python.linting.enabled": true
+                    }
+                }
+            }
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.customizations.is_some());
+        let customizations = devcontainer.customizations.unwrap();
+        assert!(customizations.contains_key("vscode"));
+    }
+
+    #[test]
+    fn test_build_with_args() {
+        let json = r#"
+        {
+            "name": "test",
+            "build": {
+                "dockerfile": "Dockerfile",
+                "context": "..",
+                "args": {
+                    "VARIANT": "3.9",
+                    "NODE_VERSION": "14"
+                },
+                "target": "development"
+            }
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.build.is_some());
+        let build = devcontainer.build.unwrap();
+        assert_eq!(build.target.as_deref(), Some("development"));
+        assert!(build.args.is_some());
+        let args = build.args.unwrap();
+        assert_eq!(args.get("VARIANT").map(|s| s.as_str()), Some("3.9"));
+    }
+
+    #[test]
+    fn test_override_command() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "overrideCommand": false
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert_eq!(devcontainer.override_command, Some(false));
+    }
+
+    #[test]
+    fn test_shutdown_action() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "shutdownAction": "stopContainer"
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.shutdown_action.is_some());
+    }
+
+    #[test]
+    fn test_user_env_probe() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "userEnvProbe": "loginInteractiveShell"
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.user_env_probe.is_some());
+    }
+
+    #[test]
+    fn test_wait_for() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "waitFor": "postCreateCommand"
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.wait_for.is_some());
+    }
+
+    #[test]
+    fn test_initialize_command() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "initializeCommand": "echo Initializing"
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.initialize_command.is_some());
+    }
+
+    #[test]
+    fn test_app_port() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "appPort": [3000, "8080:8080"]
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.app_port.is_some());
+    }
+
+    #[test]
+    fn test_run_args() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "runArgs": ["--cap-add=SYS_PTRACE", "--security-opt", "seccomp=unconfined"]
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert!(devcontainer.run_args.is_some());
+        let args = devcontainer.run_args.unwrap();
+        assert_eq!(args.len(), 3);
+    }
+
+    #[test]
+    fn test_workspace_mount() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "workspaceFolder": "/workspace",
+            "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind"
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert_eq!(devcontainer.workspace_folder.as_deref(), Some("/workspace"));
+        assert!(devcontainer.workspace_mount.is_some());
+    }
+
+    #[test]
+    fn test_update_remote_user_uid() {
+        let json = r#"
+        {
+            "name": "test",
+            "image": "ubuntu:20.04",
+            "updateRemoteUserUID": true
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+        assert_eq!(devcontainer.update_remote_user_uid, Some(true));
     }
 
     #[test]
@@ -974,5 +1688,108 @@ mod tests {
         assert!(devcontainer.post_create_command.is_none());
         assert!(devcontainer.post_start_command.is_none());
         assert!(devcontainer.post_attach_command.is_none());
+    }
+
+    #[test]
+    fn test_comprehensive_devcontainer() {
+        let json = r#"
+        {
+            "name": "My Dev Container",
+            "build": {
+                "dockerfile": "Dockerfile",
+                "context": "..",
+                "args": {
+                    "VARIANT": "20.04",
+                    "NODE_VERSION": "18"
+                },
+                "target": "development"
+            },
+            "features": {
+                "ghcr.io/devcontainers/features/node:1": {
+                    "version": "18"
+                },
+                "ghcr.io/devcontainers/features/docker-in-docker:2": {}
+            },
+            "forwardPorts": [3000, 8080],
+            "portsAttributes": {
+                "3000": {
+                    "label": "Frontend",
+                    "onAutoForward": "openBrowser"
+                }
+            },
+            "mounts": [
+                {
+                    "type": "volume",
+                    "source": "node_modules",
+                    "target": "/workspace/node_modules"
+                }
+            ],
+            "containerEnv": {
+                "NODE_ENV": "development"
+            },
+            "remoteEnv": {
+                "PATH": "${containerEnv:PATH}:/custom/bin"
+            },
+            "runArgs": ["--init"],
+            "postCreateCommand": {
+                "install": "npm install",
+                "prepare": "npm run prepare"
+            },
+            "postStartCommand": "npm run dev",
+            "remoteUser": "vscode",
+            "updateRemoteUserUID": true,
+            "customizations": {
+                "vscode": {
+                    "extensions": [
+                        "dbaeumer.vscode-eslint",
+                        "esbenp.prettier-vscode"
+                    ]
+                }
+            },
+            "hostRequirements": {
+                "cpus": 2,
+                "memory": "4gb"
+            }
+        }
+        "#;
+
+        let devcontainer: Devcontainer = serde_json::from_str(json).unwrap();
+
+        // Verify general properties
+        assert_eq!(devcontainer.name.as_deref(), Some("My Dev Container"));
+        assert_eq!(devcontainer.features.len(), 2);
+
+        // Verify build configuration
+        assert!(devcontainer.build.is_some());
+        let build = devcontainer.build.unwrap();
+        assert_eq!(build.dockerfile.as_deref(), Some("Dockerfile"));
+        assert_eq!(build.context.as_deref(), Some(".."));
+        assert_eq!(build.target.as_deref(), Some("development"));
+        assert!(build.args.is_some());
+
+        // Verify port forwarding
+        assert!(devcontainer.forward_ports.is_some());
+        assert!(devcontainer.ports_attributes.is_some());
+
+        // Verify mounts
+        assert!(devcontainer.mounts.is_some());
+
+        // Verify environment
+        assert!(devcontainer.container_env.is_some());
+        assert!(devcontainer.remote_env.is_some());
+
+        // Verify lifecycle commands
+        assert!(devcontainer.post_create_command.is_some());
+        assert!(devcontainer.post_start_command.is_some());
+
+        // Verify user configuration
+        assert_eq!(devcontainer.remote_user.as_deref(), Some("vscode"));
+        assert_eq!(devcontainer.update_remote_user_uid, Some(true));
+
+        // Verify customizations
+        assert!(devcontainer.customizations.is_some());
+
+        // Verify host requirements
+        assert!(devcontainer.host_requirements.is_some());
     }
 }
