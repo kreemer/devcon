@@ -1,14 +1,12 @@
 [package]
-name = "devcon-agent"
+name = "devcon-proto"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
 [dependencies]
-devcon-proto = { path = "../proto" }
 prost = "0.13"
 bytes = "1.9"
 
-[[bin]]
-name = "devcon-agent"
-path = "src/main.rs"
+[build-dependencies]
+prost-build = "0.13"

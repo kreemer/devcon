@@ -54,13 +54,14 @@
 
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader};
-use std::process::{Command, Stdio};
+use std::io::{BufRead, BufReader, Read};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::bail;
+use devcon_proto::{AgentMessage, agent_message};
 use minijinja::Environment;
+use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tracing::{debug, info, trace, warn};
@@ -72,17 +73,6 @@ use crate::{
     devcontainer::{DevcontainerWorkspace, LifecycleCommand, OnAutoForward, PortAttributes},
     driver::{process_features, runtime::ContainerRuntime},
 };
-
-#[derive(Debug, Serialize, Deserialize)]
-#[serde(tag = "type")]
-enum AgentMessage {
-    PortDiscovered { port: u16 },
-    PortClosed { port: u16 },
-    PortForwarded { port: u16, host_port: u16 },
-    ListPorts,
-    PortList { ports: Vec<u16> },
-    Shutdown,
-}
 
 /// Driver for managing container build and runtime operations.
 ///
@@ -493,6 +483,22 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             None => { /* No onCreateCommand specified */ }
         };
 
+        // Start the devcon-agent in the background
+        info!("Starting devcon-agent in the background...");
+        self.runtime.exec(
+            handle.as_ref(),
+            vec![
+                "bash",
+                "-c",
+                "nohup /opt/devcon-agent > /tmp/devcon-agent.out 2> /tmp/devcon-agent.err < /dev/null &",
+            ],
+            &[],
+        )?;
+        info!("devcon-agent started successfully");
+
+        // Start listener for agent messages
+        self.start_agent_listener(handle)?;
+
         Ok(())
     }
 
@@ -672,5 +678,88 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         cmd: &str,
     ) -> String {
         cmd.to_string()
+    }
+
+    /// Starts a background listener that reads and processes agent messages
+    fn start_agent_listener(
+        &self,
+        container_handle: Box<dyn crate::driver::runtime::ContainerHandle>,
+    ) -> anyhow::Result<()> {
+        info!("Starting agent message listener...");
+
+        // Start the tail command before spawning the thread
+        let mut child = self
+            .runtime
+            .tail_file(container_handle.as_ref(), "/tmp/devcon-agent.out")?;
+
+        thread::spawn(move || {
+            // Give the agent a moment to start
+            std::thread::sleep(std::time::Duration::from_millis(500));
+
+            let stdout = child.stdout.take().unwrap();
+            let stderr = child.stderr.take().unwrap();
+
+            // Log stderr in a separate thread
+            thread::spawn(move || {
+                let reader = BufReader::new(stderr);
+                for line in reader.lines() {
+                    if let Ok(line) = line {
+                        debug!("[agent-tail] {}", line);
+                    }
+                }
+            });
+
+            // Read and decode protobuf messages
+            let mut reader = BufReader::new(stdout);
+            let mut len_buf = [0u8; 4];
+
+            loop {
+                // Read message length
+                if reader.read_exact(&mut len_buf).is_err() {
+                    debug!("Agent listener: connection closed");
+                    break;
+                }
+                let len = u32::from_be_bytes(len_buf) as usize;
+
+                // Read message data
+                let mut msg_buf = vec![0u8; len];
+                if reader.read_exact(&mut msg_buf).is_err() {
+                    warn!("Agent listener: failed to read message data");
+                    break;
+                }
+
+                // Decode protobuf message
+                if let Ok(msg) = AgentMessage::decode(&msg_buf[..]) {
+                    match msg.message {
+                        Some(agent_message::Message::StartPortForward(port_msg)) => {
+                            info!(
+                                "🔍 Agent discovered port {} listening in container",
+                                port_msg.port
+                            );
+                            // TODO: Implement actual port forwarding logic here
+                            info!(
+                                "💡 Add port {} to 'forwardPorts' in devcontainer.json to auto-forward",
+                                port_msg.port
+                            );
+                        }
+                        Some(agent_message::Message::StopPortForward(port_msg)) => {
+                            debug!("Port {} closed in container", port_msg.port);
+                        }
+                        Some(agent_message::Message::OpenUrl(_)) => {
+                            debug!("Received OpenUrl message from agent (unexpected)");
+                        }
+                        None => {
+                            debug!("Received empty agent message");
+                        }
+                    }
+                } else {
+                    warn!("Failed to decode protobuf message from agent");
+                }
+            }
+
+            debug!("Agent listener thread exiting");
+        });
+
+        Ok(())
     }
 }
