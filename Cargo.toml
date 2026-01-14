@@ -37,6 +37,7 @@ indicatif = "0.18.3"
 tracing = "0.1.44"
 tracing-indicatif = "0.3.14"
 tracing-subscriber = "0.3.22"
+dircpy = "0.3.19"
 
 [dev-dependencies]
 assert_cmd = "2.1.1"
