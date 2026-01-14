@@ -237,4 +237,24 @@ impl ContainerRuntime for AppleRuntime {
 
         Ok(result)
     }
+
+    fn tail_file(
+        &self,
+        container_handle: &dyn super::ContainerHandle,
+        file_path: &str,
+    ) -> anyhow::Result<std::process::Child> {
+        let child = Command::new("container")
+            .arg("exec")
+            .arg("-i")
+            .arg(container_handle.id())
+            .arg("tail")
+            .arg("-f")
+            .arg(file_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        Ok(child)
+    }
 }

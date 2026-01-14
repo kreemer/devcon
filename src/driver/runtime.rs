@@ -35,12 +35,12 @@ pub mod docker;
 ///
 /// This trait defines the interface for interacting with container runtimes,
 /// allowing DevCon to work with different container CLIs transparently.
-pub trait ContainerHandle {
+pub trait ContainerHandle: Send {
     /// Returns the container ID.
     fn id(&self) -> &str;
 }
 
-pub trait ContainerRuntime {
+pub trait ContainerRuntime: Send {
     /// Builds a container image from a Dockerfile.
     ///
     /// # Arguments
@@ -119,4 +119,25 @@ pub trait ContainerRuntime {
     ///
     /// Returns an error if the list images command fails or output cannot be parsed.
     fn images(&self) -> anyhow::Result<Vec<String>>;
+
+    /// Tail a file inside a running container, returning a child process
+    /// with stdout that can be read to follow the file contents.
+    ///
+    /// # Arguments
+    ///
+    /// * `container_handle` - Handle of the container
+    /// * `file_path` - Path to the file to tail inside the container
+    ///
+    /// # Returns
+    ///
+    /// A child process with stdout available for reading
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the tail command fails to start.
+    fn tail_file(
+        &self,
+        container_handle: &dyn ContainerHandle,
+        file_path: &str,
+    ) -> anyhow::Result<std::process::Child>;
 }

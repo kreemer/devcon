@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package devcon;
+
+// Message from agent to host to request port forwarding
+message StartPortForward {
+  uint32 port = 1;
+}
+
+// Message from agent to host to stop port forwarding
+message StopPortForward {
+  uint32 port = 1;
+}
+
+// Message from host to agent to open a URL in the browser
+message OpenUrl {
+  string url = 1;
+}
+
+// Wrapper message for all agent communication
+message AgentMessage {
+  oneof message {
+    StartPortForward start_port_forward = 1;
+    StopPortForward stop_port_forward = 2;
+    OpenUrl open_url = 3;
+  }
+}
