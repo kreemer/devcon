@@ -6,11 +6,17 @@ use clap::{Parser, Subcommand};
 use devcon_proto::{AgentMessage, OpenUrl, StartPortForward, StopPortForward, agent_message};
 use prost::Message;
 use std::io::{self, Write};
+use std::os::unix::net::UnixStream;
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "devcon-agent")]
-#[command(about = "DevCon port forwarding agent", long_about = None)]
+#[command(about = "DevCon agent", long_about = None)]
 struct Cli {
+    /// Path to the Unix domain socket
+    #[arg(short, long, env = "DEVCON_SOCKET")]
+    socket: PathBuf,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -37,16 +43,18 @@ enum Commands {
     },
 }
 
-fn send_message(msg: &AgentMessage) -> io::Result<()> {
+fn send_message(socket_path: &PathBuf, msg: &AgentMessage) -> io::Result<()> {
     let mut buf = Vec::new();
     msg.encode(&mut buf)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-    // Write length-prefixed message to stdout
+    // Connect to the Unix domain socket
+    let mut stream = UnixStream::connect(socket_path)?;
+
+    // Write length-prefixed message to the socket
     let len = buf.len() as u32;
-    io::stdout().write_all(&len.to_be_bytes())?;
-    io::stdout().write_all(&buf)?;
-    io::stdout().flush()?;
+    stream.write_all(&len.to_be_bytes())?;
+    stream.write_all(&buf)?;
 
     Ok(())
 }
@@ -61,7 +69,7 @@ fn main() {
                     port: port as u32,
                 })),
             };
-            send_message(&msg)
+            send_message(&cli.socket, &msg)
         }
         Commands::StopPortForward { port } => {
             let msg = AgentMessage {
@@ -69,13 +77,13 @@ fn main() {
                     port: port as u32,
                 })),
             };
-            send_message(&msg)
+            send_message(&cli.socket, &msg)
         }
         Commands::OpenUrl { url } => {
             let msg = AgentMessage {
                 message: Some(agent_message::Message::OpenUrl(OpenUrl { url })),
             };
-            send_message(&msg)
+            send_message(&cli.socket, &msg)
         }
     };
 
