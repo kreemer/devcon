@@ -54,11 +54,11 @@
 
 use std::collections::HashMap;
 use std::fs::{self, File};
-use std::io::{BufRead, BufReader, Read};
+use std::io::Read;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use anyhow::bail;
+use anyhow::{Context, bail};
 use devcon_proto::{AgentMessage, agent_message};
 use minijinja::Environment;
 use prost::Message as _;
@@ -386,6 +386,14 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
 
         // Process environment variables
         let mut processed_env_vars = Vec::new();
+
+        // Add DEVCON_SOCKET environment variable
+        let socket_path = format!(
+            "/tmp/devcon-sockets/devcon-{}.sock",
+            devcontainer_workspace.get_sanitized_name()
+        );
+        processed_env_vars.push(format!("DEVCON_SOCKET={}", socket_path));
+
         for env_var in env_variables {
             if env_var.contains("=") {
                 processed_env_vars.push(env_var.clone());
@@ -667,80 +675,99 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         cmd.to_string()
     }
 
-    /// Starts a background listener that reads and processes agent messages
+    /// Starts a background listener that reads and processes agent messages from Unix socket
     fn start_agent_listener(
         &self,
         container_handle: Box<dyn crate::driver::runtime::ContainerHandle>,
     ) -> anyhow::Result<()> {
-        info!("Starting agent message listener...");
+        info!("Starting agent message listener on Unix socket...");
 
-        // Start the tail command before spawning the thread
-        let mut child = self
-            .runtime
-            .tail_file(container_handle.as_ref(), "/tmp/devcon-agent.out")?;
+        use std::os::unix::net::UnixListener;
+
+        // Create socket path in host's /tmp/devcon-sockets directory
+        let socket_path = format!("/tmp/devcon-sockets/devcon-{}.sock", container_handle.id());
+
+        // Create directory if it doesn't exist
+        std::fs::create_dir_all("/tmp/devcon-sockets")?;
+
+        // Remove existing socket if present
+        let _ = std::fs::remove_file(&socket_path);
+
+        let listener = UnixListener::bind(&socket_path)
+            .context(format!("Failed to bind Unix socket at {}", socket_path))?;
+
+        info!("Agent listener socket bound at {}", socket_path);
 
         let handle = thread::spawn(move || {
-            // Give the agent a moment to start
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            debug!("Agent listener thread started, waiting for connections...");
 
-            let stdout = child.stdout.take().unwrap();
-            let stderr = child.stderr.take().unwrap();
+            // Accept connections and process messages
+            for stream in listener.incoming() {
+                match stream {
+                    Ok(mut stream) => {
+                        debug!("Agent connected to socket");
 
-            // Log stderr in a separate thread
-            thread::spawn(move || {
-                let reader = BufReader::new(stderr);
-                for line in reader.lines() {
-                    if let Ok(line) = line {
-                        debug!("[agent-tail] {}", line);
+                        // Read length-prefixed messages
+                        let mut len_buf = [0u8; 4];
+                        loop {
+                            // Read message length
+                            if let Err(e) = stream.read_exact(&mut len_buf) {
+                                if e.kind() == std::io::ErrorKind::UnexpectedEof {
+                                    debug!("Agent connection closed");
+                                    break;
+                                }
+                                warn!("Error reading message length: {}", e);
+                                break;
+                            }
+
+                            let len = u32::from_be_bytes(len_buf) as usize;
+                            if len == 0 || len > 1024 * 1024 {
+                                warn!("Invalid message length: {}", len);
+                                break;
+                            }
+
+                            // Read message data
+                            let mut msg_buf = vec![0u8; len];
+                            if let Err(e) = stream.read_exact(&mut msg_buf) {
+                                warn!("Error reading message data: {}", e);
+                                break;
+                            }
+
+                            // Decode protobuf message
+                            match AgentMessage::decode(&msg_buf[..]) {
+                                Ok(msg) => {
+                                    debug!("Received agent message: {:?}", msg);
+                                    if let Some(message) = msg.message {
+                                        match message {
+                                            agent_message::Message::StartPortForward(req) => {
+                                                info!(
+                                                    "🔍 Agent discovered port {} listening in container",
+                                                    req.port
+                                                );
+                                                // TODO: Implement actual port forwarding logic here
+                                                info!(
+                                                    "💡 Add port {} to 'forwardPorts' in devcontainer.json to auto-forward",
+                                                    req.port
+                                                );
+                                            }
+                                            agent_message::Message::StopPortForward(req) => {
+                                                debug!("Port {} closed in container", req.port);
+                                            }
+                                            agent_message::Message::OpenUrl(req) => {
+                                                debug!("Received OpenUrl request: {}", req.url);
+                                            }
+                                        }
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Failed to decode agent message: {}", e);
+                                }
+                            }
+                        }
                     }
-                }
-            });
-
-            // Read and decode protobuf messages
-            let mut reader = BufReader::new(stdout);
-            let mut len_buf = [0u8; 4];
-
-            loop {
-                // Read message length
-                if reader.read_exact(&mut len_buf).is_err() {
-                    debug!("Agent listener: connection closed");
-                    break;
-                }
-                let len = u32::from_be_bytes(len_buf) as usize;
-
-                // Read message data
-                let mut msg_buf = vec![0u8; len];
-                if reader.read_exact(&mut msg_buf).is_err() {
-                    warn!("Agent listener: failed to read message data");
-                    break;
-                }
-
-                // Decode protobuf message
-                if let Ok(msg) = AgentMessage::decode(&msg_buf[..]) {
-                    match msg.message {
-                        Some(agent_message::Message::StartPortForward(port_msg)) => {
-                            info!(
-                                "🔍 Agent discovered port {} listening in container",
-                                port_msg.port
-                            );
-                            // TODO: Implement actual port forwarding logic here
-                            info!(
-                                "💡 Add port {} to 'forwardPorts' in devcontainer.json to auto-forward",
-                                port_msg.port
-                            );
-                        }
-                        Some(agent_message::Message::StopPortForward(port_msg)) => {
-                            debug!("Port {} closed in container", port_msg.port);
-                        }
-                        Some(agent_message::Message::OpenUrl(_)) => {
-                            debug!("Received OpenUrl message from agent (unexpected)");
-                        }
-                        None => {
-                            debug!("Received empty agent message");
-                        }
+                    Err(e) => {
+                        warn!("Failed to accept connection: {}", e);
                     }
-                } else {
-                    warn!("Failed to decode protobuf message from agent");
                 }
             }
 
@@ -748,8 +775,9 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         });
 
         let result = handle.join();
+
         match result {
-            Ok(_) => info!("Agent listener thread exited normally"),
+            Ok(_) => debug!("Agent listener thread joined successfully"),
             Err(e) => warn!("Agent listener thread panicked: {:?}", e),
         }
 

@@ -52,7 +52,8 @@ cargo b --release --workspace --bin devcon-agent
 mv target/release/devcon-agent /usr/local/bin/devcon-agent
 rm -rf /tmp/devcon
 
-touch /tmp/devcon-agent.out
+mkdir -p /tmp/devcon-sockets
+chmod 777 /tmp/devcon-sockets
 echo "DevCon Agent installed successfully."
 "###,
             )
@@ -110,6 +111,13 @@ impl Agent {
             "id": self.config.id,
             "version": self.config.version,
             "name": self.config.name,
+            "mounts": [
+                {
+                    "type": "bind",
+                    "source": "/tmp/devcon-sockets",
+                    "target": "/tmp/devcon-sockets"
+                }
+            ]
         });
 
         if let Some(desc) = &self.config.description {
