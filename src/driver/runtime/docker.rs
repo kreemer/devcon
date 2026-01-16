@@ -122,6 +122,7 @@ impl ContainerRuntime for DockerRuntime {
         volume_mount: &str,
         label: &str,
         env_vars: &[String],
+        additional_mounts: &[crate::devcontainer::Mount],
     ) -> anyhow::Result<Box<dyn super::ContainerHandle>> {
         let mut cmd = Command::new("docker");
         cmd.arg("run")
@@ -135,6 +136,34 @@ impl ContainerRuntime for DockerRuntime {
         // Add environment variables
         for env_var in env_vars {
             cmd.arg("-e").arg(env_var);
+        }
+
+        // Add additional mounts from features and devcontainer config
+        for mount in additional_mounts {
+            match mount {
+                crate::devcontainer::Mount::String(mount_str) => {
+                    cmd.arg("-v").arg(mount_str);
+                }
+                crate::devcontainer::Mount::Structured(structured) => {
+                    let mount_arg = match &structured.mount_type {
+                        crate::devcontainer::MountType::Bind => {
+                            if let Some(source) = &structured.source {
+                                format!("type=bind,source={},target={}", source, structured.target)
+                            } else {
+                                continue; // Skip bind mounts without source
+                            }
+                        }
+                        crate::devcontainer::MountType::Volume => {
+                            if let Some(source) = &structured.source {
+                                format!("type=volume,source={},target={}", source, structured.target)
+                            } else {
+                                format!("type=volume,target={}", structured.target)
+                            }
+                        }
+                    };
+                    cmd.arg("--mount").arg(mount_arg);
+                }
+            }
         }
 
         cmd.arg(image_tag);

@@ -43,7 +43,7 @@ use tracing::{debug, trace};
 
 use crate::{
     config::Config,
-    devcontainer::DevcontainerWorkspace,
+    workspace::Workspace,
     driver::{
         container::ContainerDriver,
         runtime::{apple::AppleRuntime, docker::DockerRuntime},
@@ -139,7 +139,7 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
     let config = Config::load()?;
 
     trace!("Config loaded {:?}", config);
-    let devcontainer_workspace = DevcontainerWorkspace::try_from(path)?;
+    let devcontainer_workspace = Workspace::try_from(path)?;
 
     // Create runtime based on config
     let runtime_name = config.resolve_runtime()?;
@@ -198,7 +198,7 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
 pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
     let config = Config::load()?;
     trace!("Config loaded {:?}", config);
-    let devcontainer_workspace = DevcontainerWorkspace::try_from(path.clone())?;
+    let devcontainer_workspace = Workspace::try_from(path.clone())?;
 
     // Create runtime based on config
     let runtime_name = config.resolve_runtime()?;
@@ -228,7 +228,7 @@ pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
 pub fn handle_shell_command(path: PathBuf, _env: &[String]) -> anyhow::Result<()> {
     let config = Config::load()?;
     trace!("Config loaded {:?}", config);
-    let devcontainer_workspace = DevcontainerWorkspace::try_from(path.clone())?;
+    let devcontainer_workspace = Workspace::try_from(path.clone())?;
 
     // Create runtime based on config
     let runtime_name = config.resolve_runtime()?;

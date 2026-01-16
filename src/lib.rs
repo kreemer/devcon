@@ -27,3 +27,5 @@
 
 pub mod config;
 pub mod devcontainer;
+pub mod feature;
+pub mod workspace;
