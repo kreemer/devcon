@@ -55,23 +55,28 @@
 use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Read;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::{Context, bail};
 use devcon_proto::{AgentMessage, agent_message};
+use dircpy::copy_dir;
 use minijinja::Environment;
 use prost::Message as _;
 use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tracing::{debug, info, trace, warn};
 
-use crate::devcontainer::{Feature, FeatureSource};
+use crate::devcontainer::{FeatureRef, FeatureSource};
 use crate::driver::agent::{self, AgentConfig};
+use crate::driver::feature_process::FeatureProcessResult;
 use crate::{
     config::Config,
-    devcontainer::{DevcontainerWorkspace, LifecycleCommand, OnAutoForward, PortAttributes},
-    driver::{process_features, runtime::ContainerRuntime},
+    devcontainer::{LifecycleCommand, OnAutoForward, PortAttributes},
+    driver::feature_process::process_features,
+    driver::runtime::ContainerRuntime,
+    workspace::Workspace,
 };
 
 /// Driver for managing container build and runtime operations.
@@ -126,7 +131,7 @@ impl ContainerDriver {
     /// ```
     pub fn build(
         &self,
-        devcontainer_workspace: DevcontainerWorkspace,
+        devcontainer_workspace: Workspace,
         env_variables: &[String],
     ) -> anyhow::Result<()> {
         let directory = TempDir::new()?;
@@ -156,23 +161,50 @@ impl ContainerDriver {
 
         // Add agent installation feature
         let agent_path = agent::Agent::new(AgentConfig::default()).generate()?;
-        features.push(Feature {
-            source: FeatureSource::Local { path: agent_path },
-            options: serde_json::json!({}),
-        });
+        features.push(FeatureRef::new(FeatureSource::Local { path: agent_path }));
 
         debug!("Final feature list: {:?}", features);
-        let processed_features = process_features(&features, &directory)?;
+        let processed_features = process_features(&features)?;
         let mut feature_install = String::new();
+
+        // Collect mounts from all features
+        let mut feature_mounts = Vec::new();
+        for feature_result in &processed_features {
+            if let Some(ref mounts) = feature_result.feature.mounts {
+                // Convert feature::FeatureMount to devcontainer::Mount
+                for mount in mounts {
+                    match mount {
+                        crate::feature::FeatureMount::String(s) => {
+                            feature_mounts.push(crate::devcontainer::Mount::String(s.clone()));
+                        }
+                        crate::feature::FeatureMount::Structured(sm) => {
+                            let mount_type = match sm.mount_type {
+                                crate::feature::MountType::Bind => {
+                                    crate::devcontainer::MountType::Bind
+                                }
+                                crate::feature::MountType::Volume => {
+                                    crate::devcontainer::MountType::Volume
+                                }
+                            };
+                            feature_mounts.push(crate::devcontainer::Mount::Structured(
+                                crate::devcontainer::StructuredMount {
+                                    mount_type,
+                                    source: sm.source.clone(),
+                                    target: sm.target.clone(),
+                                },
+                            ));
+                        }
+                    }
+                }
+            }
+        }
 
         let mut i = 0;
         for feature_result in processed_features {
-            let feature_name = match &feature_result.feature.source {
-                crate::devcontainer::FeatureSource::Registry {
-                    registry_type: _,
-                    registry,
-                } => &registry.name,
-                crate::devcontainer::FeatureSource::Local { path } => &path
+            let feature_path_name = self.copy_feature_to_build(&feature_result, &directory)?;
+            let feature_name = match &feature_result.feature_ref.source {
+                FeatureSource::Registry { registry } => &registry.name,
+                FeatureSource::Local { path } => &path
                     .canonicalize()?
                     .file_name()
                     .unwrap()
@@ -186,7 +218,7 @@ impl ContainerDriver {
             }
             feature_install.push_str(&format!(
                 "COPY {}/* /tmp/features/{}/ \n",
-                feature_result.relative_path, feature_name
+                feature_path_name, feature_name
             ));
 
             feature_install.push_str(&format!(
@@ -315,6 +347,26 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         Ok(())
     }
 
+    fn copy_feature_to_build(
+        &self,
+        process: &FeatureProcessResult,
+        build_directory: &TempDir,
+    ) -> anyhow::Result<String> {
+        let directory_name = format!(
+            "{}-{}",
+            process.path.file_name().unwrap().to_string_lossy(),
+            process.feature.version
+        );
+        let feature_dest = build_directory.path().join(&directory_name);
+        copy_dir(&process.path, &feature_dest)?;
+
+        Ok(feature_dest
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .to_string())
+    }
+
     /// Starts a container instance with the project directory mounted.
     ///
     /// This method starts a container in detached mode with:
@@ -351,7 +403,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
     /// ```
     pub fn start(
         &self,
-        devcontainer_workspace: DevcontainerWorkspace,
+        devcontainer_workspace: Workspace,
         env_variables: &[String],
     ) -> anyhow::Result<()> {
         let handles = self.runtime.list()?;
@@ -384,6 +436,55 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
 
         let label = self.get_container_label(&devcontainer_workspace);
 
+        // Collect all mounts: from devcontainer config and features
+        let mut all_mounts = Vec::new();
+
+        // Add mounts from devcontainer configuration
+        if let Some(ref mounts) = devcontainer_workspace.devcontainer.mounts {
+            all_mounts.extend(mounts.clone());
+        }
+
+        // Process features to get their mounts
+        let mut features = devcontainer_workspace
+            .devcontainer
+            .merge_additional_features(&self.config.additional_features)?;
+
+        // Add agent installation feature
+        let agent_path = agent::Agent::new(AgentConfig::default()).generate()?;
+        features.push(FeatureRef::new(FeatureSource::Local { path: agent_path }));
+
+        // Extract mounts from features (we need to process them but won't use the full results here)
+        let processed_features = process_features(&features)?;
+        for feature_result in &processed_features {
+            if let Some(ref mounts) = feature_result.feature.mounts {
+                // Convert feature::FeatureMount to devcontainer::Mount
+                for mount in mounts {
+                    match mount {
+                        crate::feature::FeatureMount::String(s) => {
+                            all_mounts.push(crate::devcontainer::Mount::String(s.clone()));
+                        }
+                        crate::feature::FeatureMount::Structured(sm) => {
+                            let mount_type = match sm.mount_type {
+                                crate::feature::MountType::Bind => {
+                                    crate::devcontainer::MountType::Bind
+                                }
+                                crate::feature::MountType::Volume => {
+                                    crate::devcontainer::MountType::Volume
+                                }
+                            };
+                            all_mounts.push(crate::devcontainer::Mount::Structured(
+                                crate::devcontainer::StructuredMount {
+                                    mount_type,
+                                    source: sm.source.clone(),
+                                    target: sm.target.clone(),
+                                },
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+
         // Process environment variables
         let mut processed_env_vars = Vec::new();
 
@@ -409,6 +510,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             &volume_mount,
             &label,
             &processed_env_vars,
+            &all_mounts,
         )?;
 
         match &devcontainer_workspace.devcontainer.on_create_command {
@@ -528,7 +630,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
     /// # Ok(())
     /// # }
     /// ```
-    pub fn shell(&self, devcontainer_workspace: DevcontainerWorkspace) -> anyhow::Result<()> {
+    pub fn shell(&self, devcontainer_workspace: Workspace) -> anyhow::Result<()> {
         let handles = self.runtime.list()?;
         let handle = handles
             .iter()
@@ -622,7 +724,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
     /// # Returns
     ///
     /// A string containing the full image tag.
-    fn get_image_tag(&self, devcontainer_workspace: &DevcontainerWorkspace) -> String {
+    fn get_image_tag(&self, devcontainer_workspace: &Workspace) -> String {
         format!("devcon-{}", devcontainer_workspace.get_sanitized_name())
     }
 
@@ -634,7 +736,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
     /// # Returns
     ///
     /// A string containing the container name.
-    fn get_container_name(&self, devcontainer_workspace: &DevcontainerWorkspace) -> String {
+    fn get_container_name(&self, devcontainer_workspace: &Workspace) -> String {
         format!("devcon.{}", devcontainer_workspace.get_sanitized_name())
     }
 
@@ -645,7 +747,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
     /// # Returns
     ///
     /// A string containing the label key-value pair.
-    fn get_container_label(&self, devcontainer_workspace: &DevcontainerWorkspace) -> String {
+    fn get_container_label(&self, devcontainer_workspace: &Workspace) -> String {
         format!(
             "devcon.project={}",
             devcontainer_workspace.get_sanitized_name()
@@ -667,11 +769,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
     /// # Returns
     ///
     /// A wrapped command string ready for execution.
-    fn wrap_lifecycle_command(
-        &self,
-        _devcontainer_workspace: &DevcontainerWorkspace,
-        cmd: &str,
-    ) -> String {
+    fn wrap_lifecycle_command(&self, _devcontainer_workspace: &Workspace, cmd: &str) -> String {
         cmd.to_string()
     }
 

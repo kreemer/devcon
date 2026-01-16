@@ -34,9 +34,6 @@
 //! ## Main Types
 //!
 //! - [`Devcontainer`] - The main configuration structure
-//! - [`Feature`] - Represents a devcontainer feature with its source and options
-//! - [`FeatureSource`] - Defines where a feature comes from (registry or local)
-//! - [`FeatureRegistry`] - Registry-specific feature metadata
 //!
 //! ## Examples
 //!
@@ -57,68 +54,6 @@ use anyhow::bail;
 use serde::Deserialize;
 use serde::de;
 use serde_json::Value;
-
-/// Represents a workspace containing a devcontainer configuration.
-///
-/// This structure holds the path to the project directory and
-/// the parsed devcontainer configuration.
-///
-/// # Fields
-///
-/// * `path` - The path to the project directory
-/// * `devcontainer` - The parsed devcontainer configuration
-///
-/// # Examples
-///
-/// no_run
-/// use std::path::PathBuf;
-/// use devcon::devcontainer::{Devcontainer, DevcontainerWorkspace};
-/// let workspace = DevcontainerWorkspace {
-///   path: PathBuf::from("/path/to/project"),
-///   devcontainer: Devcontainer::try_from(PathBuf::from("/path/to/project"))?,
-/// };
-#[derive(Clone)]
-pub struct DevcontainerWorkspace {
-    pub path: PathBuf,
-    pub devcontainer: Devcontainer,
-}
-
-impl TryFrom<PathBuf> for DevcontainerWorkspace {
-    type Error = anyhow::Error;
-
-    fn try_from(path: PathBuf) -> std::result::Result<Self, Self::Error> {
-        let canonical_path = fs::canonicalize(&path)?;
-        let devcontainer = Devcontainer::try_from(canonical_path.clone())?;
-
-        Ok(DevcontainerWorkspace {
-            path: canonical_path,
-            devcontainer,
-        })
-    }
-}
-
-impl DevcontainerWorkspace {
-    pub fn get_name(&self) -> String {
-        if let Some(name) = self.devcontainer.name.as_ref() {
-            return name.clone();
-        }
-
-        self.path
-            .file_name()
-            .unwrap_or_else(|| std::ffi::OsStr::new("default"))
-            .to_string_lossy()
-            .to_string()
-    }
-
-    pub fn get_sanitized_name(&self) -> String {
-        let name = self.get_name();
-
-        name.to_ascii_lowercase().replace(
-            |c: char| !c.is_ascii_alphanumeric() && c != '-' && c != '_',
-            "-",
-        )
-    }
-}
 
 /// Represents a lifecycle command that can be a string, array, or object.
 ///
@@ -402,7 +337,7 @@ pub struct DetailedGpuRequirement {
 pub struct Devcontainer {
     // General properties
     pub name: Option<String>,
-    pub features: Vec<Feature>,
+    pub features: Vec<FeatureRef>,
     pub override_feature_install_order: Option<Vec<String>>,
     pub forward_ports: Option<Vec<ForwardPort>>,
     pub ports_attributes: Option<HashMap<String, PortAttributes>>,
@@ -537,7 +472,7 @@ impl<'de> Deserialize<'de> for Devcontainer {
 
         let helper = DevcontainerHelper::deserialize(deserializer)?;
 
-        let features: Result<Vec<Feature>, D::Error> = helper
+        let features: Result<Vec<FeatureRef>, D::Error> = helper
             .features
             .into_iter()
             .map(|(url, options)| parse_feature(&url, options))
@@ -651,7 +586,7 @@ impl Devcontainer {
     pub fn merge_additional_features(
         &self,
         additional_features: &std::collections::HashMap<String, serde_json::Value>,
-    ) -> anyhow::Result<Vec<Feature>> {
+    ) -> anyhow::Result<Vec<FeatureRef>> {
         // Get set of existing feature URLs
         let existing_urls: Vec<String> = self
             .features
@@ -677,95 +612,6 @@ impl Devcontainer {
 
         Ok(return_features)
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct Feature {
-    pub source: FeatureSource,
-    #[allow(dead_code)]
-    pub options: serde_json::Value,
-}
-
-#[derive(Debug, Clone)]
-pub enum FeatureSource {
-    Registry {
-        registry_type: FeatureRegistryType,
-        registry: FeatureRegistry,
-    },
-    Local {
-        path: PathBuf,
-    },
-}
-
-#[derive(Debug, Clone)]
-pub struct FeatureRegistry {
-    pub owner: String,
-    pub repository: String,
-    pub name: String,
-    pub version: String,
-}
-
-#[derive(Debug, Clone)]
-pub enum FeatureRegistryType {
-    Ghcr,
-}
-
-fn parse_feature<E: de::Error>(url: &str, options: serde_json::Value) -> Result<Feature, E> {
-    if !url.starts_with("ghcr.io") && url.contains(":") {
-        return Err(de::Error::custom("Only ghcr.io features are supported"));
-    }
-
-    if url.starts_with("ghcr.io") {
-        parse_registry_feature(url, options)
-    } else {
-        parse_local_feature(url, options)
-    }
-}
-
-fn parse_local_feature<E: de::Error>(url: &str, options: serde_json::Value) -> Result<Feature, E> {
-    let path = PathBuf::from(url);
-    Ok(Feature {
-        source: FeatureSource::Local { path },
-        options,
-    })
-}
-
-fn parse_registry_feature<E: de::Error>(
-    url: &str,
-    options: serde_json::Value,
-) -> Result<Feature, E> {
-    let owner = url
-        .split("/")
-        .nth(1)
-        .ok_or_else(|| de::Error::custom("Invalid feature URL, missing owner information"))?;
-    let repository = url
-        .split("/")
-        .nth(2)
-        .ok_or_else(|| de::Error::custom("Invalid feature URL, missing repository information"))?;
-    let name = url
-        .split("/")
-        .nth(3)
-        .and_then(|s| s.split(":").next())
-        .ok_or_else(|| de::Error::custom("Invalid feature URL, missing name information"))?;
-
-    let version = url
-        .split("/")
-        .nth(3)
-        .and_then(|s| s.split(":").nth(1))
-        .unwrap_or("latest");
-
-    Ok(Feature {
-        source: FeatureSource::Registry {
-            registry_type: FeatureRegistryType::Ghcr,
-            registry: FeatureRegistry {
-                owner: owner.to_string(),
-                repository: repository.to_string(),
-                name: name.to_string(),
-                version: version.to_string(),
-            },
-        },
-        options,
-    })
 }
 
 impl TryFrom<PathBuf> for Devcontainer {
@@ -817,6 +663,110 @@ impl TryFrom<String> for Devcontainer {
     }
 }
 
+/// Defines the source location of a feature.
+#[derive(Debug, Clone)]
+pub enum FeatureSource {
+    Registry { registry: FeatureRegistry },
+    Local { path: PathBuf },
+}
+
+/// Metadata for a feature stored in an OCI registry.
+#[derive(Debug, Clone)]
+pub struct FeatureRegistry {
+    pub owner: String,
+    pub repository: String,
+    pub name: String,
+    pub version: String,
+    pub registry_type: FeatureRegistryType,
+}
+
+/// Type of OCI registry for features.
+#[derive(Debug, Clone)]
+pub enum FeatureRegistryType {
+    Ghcr,
+}
+
+/// Represents a reference to a feature in devcontainer.json.
+#[derive(Debug, Clone)]
+pub struct FeatureRef {
+    pub source: FeatureSource,
+    pub options: serde_json::Value,
+}
+
+impl FeatureRef {
+    pub fn new(source: FeatureSource) -> Self {
+        Self {
+            source,
+            options: serde_json::json!({}),
+        }
+    }
+}
+
+/// Parses a feature URL string and options into a FeatureRef struct.
+pub fn parse_feature<E: de::Error>(
+    url: &str,
+    user_options: serde_json::Value,
+) -> Result<FeatureRef, E> {
+    if !url.starts_with("ghcr.io") && url.contains(":") {
+        return Err(de::Error::custom("Only ghcr.io features are supported"));
+    }
+
+    if url.starts_with("ghcr.io") {
+        parse_registry_feature(url, user_options)
+    } else {
+        parse_local_feature(url, user_options)
+    }
+}
+
+fn parse_local_feature<E: de::Error>(
+    url: &str,
+    user_options: serde_json::Value,
+) -> Result<FeatureRef, E> {
+    let path = PathBuf::from(url);
+    Ok(FeatureRef {
+        source: FeatureSource::Local { path },
+        options: user_options,
+    })
+}
+
+fn parse_registry_feature<E: de::Error>(
+    url: &str,
+    user_options: serde_json::Value,
+) -> Result<FeatureRef, E> {
+    let owner = url
+        .split("/")
+        .nth(1)
+        .ok_or_else(|| de::Error::custom("Invalid feature URL, missing owner information"))?;
+    let repository = url
+        .split("/")
+        .nth(2)
+        .ok_or_else(|| de::Error::custom("Invalid feature URL, missing repository information"))?;
+    let name = url
+        .split("/")
+        .nth(3)
+        .and_then(|s| s.split(":").next())
+        .ok_or_else(|| de::Error::custom("Invalid feature URL, missing name information"))?;
+
+    let version = url
+        .split("/")
+        .nth(3)
+        .and_then(|s| s.split(":").nth(1))
+        .unwrap_or("latest");
+
+    Ok(FeatureRef {
+        source: FeatureSource::Registry {
+            registry: FeatureRegistry {
+                owner: owner.to_string(),
+                repository: repository.to_string(),
+                name: name.to_string(),
+                version: version.to_string(),
+                registry_type: FeatureRegistryType::Ghcr,
+            },
+        },
+        options: user_options,
+    })
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -824,10 +774,10 @@ mod tests {
 
     #[test]
     fn test_feature() {
-        let feature = Feature {
+        let feature = FeatureRef {
             source: FeatureSource::Registry {
-                registry_type: FeatureRegistryType::Ghcr,
                 registry: FeatureRegistry {
+                    registry_type: FeatureRegistryType::Ghcr,
                     owner: "devcontainers".to_string(),
                     repository: "features".to_string(),
                     name: "github-cli".to_string(),
@@ -839,11 +789,8 @@ mod tests {
 
         assert!(feature.options.is_null());
         match feature.source {
-            FeatureSource::Registry {
-                registry_type,
-                registry,
-            } => {
-                match registry_type {
+            FeatureSource::Registry { registry } => {
+                match registry.registry_type {
                     FeatureRegistryType::Ghcr => {}
                 }
                 assert_eq!("devcontainers", registry.owner);
@@ -874,11 +821,8 @@ mod tests {
         assert_eq!(devcontainer.features.len(), 1);
         let feature = &devcontainer.features[0];
         match &feature.source {
-            FeatureSource::Registry {
-                registry_type,
-                registry,
-            } => {
-                match registry_type {
+            FeatureSource::Registry { registry } => {
+                match registry.registry_type {
                     FeatureRegistryType::Ghcr => {}
                 }
                 assert_eq!("devcontainers", registry.owner);
@@ -909,11 +853,8 @@ mod tests {
         assert_eq!(devcontainer.features.len(), 2);
         let feature = &devcontainer.features[0];
         match &feature.source {
-            FeatureSource::Registry {
-                registry_type,
-                registry,
-            } => {
-                match registry_type {
+            FeatureSource::Registry { registry } => {
+                match registry.registry_type {
                     FeatureRegistryType::Ghcr => {}
                 }
                 assert_eq!("devcontainers", registry.owner);
@@ -925,11 +866,8 @@ mod tests {
         }
         let feature = &devcontainer.features[1];
         match &feature.source {
-            FeatureSource::Registry {
-                registry_type,
-                registry,
-            } => {
-                match registry_type {
+            FeatureSource::Registry { registry } => {
+                match registry.registry_type {
                     FeatureRegistryType::Ghcr => {}
                 }
                 assert_eq!("devcontainers", registry.owner);

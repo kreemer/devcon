@@ -67,6 +67,7 @@ pub trait ContainerRuntime: Send {
     /// * `volume_mount` - Volume mount in format "host_path:container_path"
     /// * `label` - Label in format "key=value"
     /// * `env_vars` - Environment variables to set
+    /// * `additional_mounts` - Additional mounts from features and devcontainer config
     ///
     /// # Errors
     ///
@@ -77,6 +78,7 @@ pub trait ContainerRuntime: Send {
         volume_mount: &str,
         label: &str,
         env_vars: &[String],
+        additional_mounts: &[crate::devcontainer::Mount],
     ) -> anyhow::Result<Box<dyn ContainerHandle>>;
 
     /// Executes a command in a running container.

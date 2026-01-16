@@ -32,6 +32,8 @@ mod command;
 mod config;
 mod devcontainer;
 mod driver;
+mod feature;
+mod workspace;
 
 #[derive(Parser, Debug)]
 #[command(
