@@ -38,7 +38,6 @@ use std::{
 };
 
 use anyhow::{Ok, bail};
-use dircpy::copy_dir;
 use indicatif::ProgressBar;
 use tempfile::TempDir;
 use tracing::{debug, info};
@@ -55,6 +54,43 @@ pub struct FeatureProcessResult {
     pub feature_ref: FeatureRef,
     pub feature: Feature,
     pub path: PathBuf,
+}
+
+impl FeatureProcessResult {
+    /// Returns the name of the feature.
+    ///
+    /// Tries to return the feature's `name` field if it exists,
+    /// otherwise falls back to the registry name or local path name.
+    pub fn name(&self) -> String {
+        // First, try to use the feature's name field if it exists
+        if let Some(ref name) = self.feature.name {
+            return name.clone();
+        }
+
+        // Fall back to the feature reference source
+        match &self.feature_ref.source {
+            Registry { registry } => registry.name.clone(),
+            Local { path } => path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .unwrap_or("unknown")
+                .to_string(),
+        }
+    }
+
+    /// Returns a directory-safe name for the feature.
+    ///
+    /// The directory name is constructed from the feature name and version,
+    /// with spaces replaced by hyphens and all characters lowercased.
+    ///
+    /// # Returns
+    ///
+    /// A string in the format "name-version" suitable for use as a directory name.
+    pub fn directory_name(&self) -> String {
+        let name = self.name().replace(' ', "-").to_lowercase();
+        let version = &self.feature.version;
+        format!("{}-{}", name, version)
+    }
 }
 
 /// Processes a list of features, downloading and extracting them as needed.
@@ -155,15 +191,12 @@ fn resolve_all_dependencies(
         let current_id = current.feature.id.clone();
         debug!("Processing dependencies for feature: {}", current_id);
 
-        // Collect all dependencies (both dependsOn and installsAfter)
+        // Collect only dependsOn dependencies for downloading
+        // installsAfter is only used for ordering, not for automatic dependency resolution
         let mut dependencies: Vec<String> = Vec::new();
 
         if let Some(ref depends_on) = current.feature.depends_on {
             dependencies.extend(depends_on.keys().cloned());
-        }
-
-        if let Some(ref installs_after) = current.feature.installs_after {
-            dependencies.extend(installs_after.iter().cloned());
         }
 
         // Process each dependency
@@ -279,25 +312,61 @@ fn topological_sort(
             dependencies.extend(installs_after.iter().cloned());
         }
 
+        debug!(
+            "Feature {} has {} dependencies: {:?}",
+            feature_id,
+            dependencies.len(),
+            dependencies
+        );
+
         for dep_id in dependencies {
+            // Normalize the dependency ID to match the feature ID format
+            // Dependencies can be full URLs like "ghcr.io/devcontainers/features/common-utils"
+            // but feature IDs are just the name like "common-utils"
+            let normalized_dep_id = if dep_id.contains('/') {
+                // Extract the last component (feature name) from the URL
+                dep_id
+                    .split('/')
+                    .last()
+                    .unwrap_or(&dep_id)
+                    .split(':')
+                    .next()
+                    .unwrap_or(&dep_id)
+                    .to_string()
+            } else {
+                dep_id.clone()
+            };
+
             // Only process dependencies that are in our feature set
-            if feature_map.contains_key(&dep_id) {
+            if feature_map.contains_key(&normalized_dep_id) {
+                debug!(
+                    "  Adding edge: {} -> {} (from dependency: {})",
+                    normalized_dep_id, feature_id, dep_id
+                );
                 adjacency
-                    .entry(dep_id.clone())
+                    .entry(normalized_dep_id.clone())
                     .or_insert_with(Vec::new)
                     .push(feature_id.clone());
                 *in_degree.entry(feature_id.clone()).or_insert(0) += 1;
+            } else {
+                debug!(
+                    "  Dependency {} (normalized: {}) not found in feature set for {}",
+                    dep_id, normalized_dep_id, feature_id
+                );
             }
         }
     }
 
     // Kahn's algorithm: start with nodes that have no dependencies
-    let mut queue: VecDeque<String> = in_degree
+    // Sort by feature ID for deterministic ordering
+    let mut initial_zero_degree: Vec<String> = in_degree
         .iter()
         .filter(|(_, degree)| **degree == 0)
         .map(|(id, _)| id.clone())
         .collect();
+    initial_zero_degree.sort();
 
+    let mut queue: VecDeque<String> = initial_zero_degree.into_iter().collect();
     let mut sorted: Vec<FeatureProcessResult> = Vec::new();
 
     while let Some(current_id) = queue.pop_front() {
@@ -308,13 +377,19 @@ fn topological_sort(
 
         // Reduce in-degree for all dependent features
         if let Some(dependents) = adjacency.get(&current_id) {
+            let mut newly_ready: Vec<String> = Vec::new();
             for dependent_id in dependents {
                 if let Some(degree) = in_degree.get_mut(dependent_id) {
                     *degree -= 1;
                     if *degree == 0 {
-                        queue.push_back(dependent_id.clone());
+                        newly_ready.push(dependent_id.clone());
                     }
                 }
+            }
+            // Sort for deterministic ordering
+            newly_ready.sort();
+            for id in newly_ready {
+                queue.push_back(id);
             }
         }
     }
@@ -333,10 +408,51 @@ fn topological_sort(
         debug!("  {}. {}", i + 1, feature.feature.id);
     }
 
+    // Prioritize common-utils to be first if present and no dependencies prevent it
+    // common-utils is a foundational feature that other features often depend on
+    if let Some(common_utils_pos) = sorted
+        .iter()
+        .position(|f| f.feature.id.contains("common-utils"))
+    {
+        if common_utils_pos > 0 {
+            // Check if common-utils has ANY dependencies in the feature set
+            // If it does, they must all be before it in the sorted order (guaranteed by topo sort)
+            // We can only move it to position 0 if it has NO dependencies
+            let has_any_dependencies = {
+                let mut deps = Vec::new();
+
+                if let Some(ref depends_on) = sorted[common_utils_pos].feature.depends_on {
+                    deps.extend(depends_on.keys());
+                }
+
+                if let Some(ref installs_after) = sorted[common_utils_pos].feature.installs_after {
+                    deps.extend(installs_after.iter());
+                }
+
+                // Check if any of these dependencies are in our sorted feature list
+                deps.iter()
+                    .any(|dep_id| sorted.iter().any(|f| &f.feature.id == *dep_id))
+            };
+
+            if !has_any_dependencies {
+                debug!("Moving common-utils to the beginning of the feature list");
+                let common_utils = sorted.remove(common_utils_pos);
+                sorted.insert(0, common_utils);
+
+                debug!("Reordered feature list with common-utils first:");
+                for (i, feature) in sorted.iter().enumerate() {
+                    debug!("  {}. {}", i + 1, feature.feature.id);
+                }
+            } else {
+                debug!("common-utils has dependencies, keeping it in topological order");
+            }
+        }
+    }
+
     Ok(sorted)
 }
 
-fn process_feature<'a>(feature_ref: &'a FeatureRef) -> anyhow::Result<FeatureProcessResult> {
+pub fn process_feature<'a>(feature_ref: &'a FeatureRef) -> anyhow::Result<FeatureProcessResult> {
     let relative_path = match &feature_ref.source {
         Registry { registry } => download_feature(registry),
         Local { path } => local_feature(path),
@@ -354,42 +470,6 @@ fn process_feature<'a>(feature_ref: &'a FeatureRef) -> anyhow::Result<FeaturePro
 
     let feature_json_content = fs::read_to_string(&feature_json_path)?;
     let parsed_feature: Feature = serde_json::from_str(&feature_json_content)?;
-
-    // Create env variable file with merged options (defaults + user overrides)
-    let mut feature_options = serde_json::json!({});
-
-    // Start with default values from feature definition
-    if let Some(ref options_map) = parsed_feature.options {
-        for (key, option) in options_map {
-            feature_options
-                .as_object_mut()
-                .unwrap()
-                .insert(key.clone(), option.default.clone());
-        }
-    }
-
-    // Override with user-specified options from feature_ref
-    if let Some(user_opts) = feature_ref.options.as_object() {
-        for (key, value) in user_opts {
-            feature_options
-                .as_object_mut()
-                .unwrap()
-                .insert(key.clone(), value.clone());
-        }
-    }
-    // TODO: Move this to the container after copying this to the build directory
-    // Create env variable file for feature installation
-    let env_file_path = relative_path.join("devcontainer-features.env");
-    let mut env_file = File::create(&env_file_path)?;
-    for (key, value) in feature_options.as_object().unwrap() {
-        use std::io::Write;
-        writeln!(
-            env_file,
-            "export {}={}",
-            key.to_uppercase(),
-            value.as_str().unwrap_or("")
-        )?;
-    }
 
     Ok(FeatureProcessResult {
         feature_ref: feature_ref.clone(),
@@ -558,7 +638,12 @@ fn download_and_cache_feature(
 
     // Move extracted feature to cache path
     fs::create_dir_all(cache_path)?;
-    copy_dir(extract_path, cache_path)?;
+
+    let mut options = fs_extra::dir::CopyOptions::new();
+    options.overwrite = true;
+    options.copy_inside = true;
+    fs_extra::dir::copy(&extract_path, cache_path, &options)
+        .map_err(|e| anyhow::anyhow!("Failed to copy extracted feature: {}", e))?;
 
     Ok(())
 }

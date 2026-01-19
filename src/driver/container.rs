@@ -54,11 +54,11 @@
 
 use std::fs::{self, File};
 use std::io::Read;
+use std::path::PathBuf;
 use std::thread;
 
 use anyhow::{Context, bail};
 use devcon_proto::{AgentMessage, agent_message};
-use dircpy::copy_dir;
 use minijinja::Environment;
 use prost::Message as _;
 use tempfile::TempDir;
@@ -187,9 +187,10 @@ impl ContainerDriver {
         env_variables: &[String],
     ) -> anyhow::Result<()> {
         let directory = TempDir::new()?;
+        let directory_path = directory.keep();
         info!(
             "Building container in temporary directory: {}",
-            directory.path().to_string_lossy()
+            directory_path.to_string_lossy()
         );
 
         trace!(
@@ -211,11 +212,14 @@ impl ContainerDriver {
             .devcontainer
             .merge_additional_features(&self.config.additional_features)?;
 
-        // Add agent installation feature
+        // Add agent installation feature to the list
+        // The agent's dependencies will be resolved along with all other features
         let agent_path = agent::Agent::new(AgentConfig::default()).generate()?;
         features.push(FeatureRef::new(FeatureSource::Local { path: agent_path }));
 
-        debug!("Final feature list: {:?}", features);
+        debug!("Initial feature list (including agent): {:?}", features);
+
+        // Process all features including dependency resolution and topological sorting
         let mut processed_features = process_features(&features)?;
 
         // Apply override feature install order if specified
@@ -230,43 +234,19 @@ impl ContainerDriver {
             processed_features = apply_feature_order_override(processed_features, override_order)?;
         }
 
-        let mut feature_install = String::new();
+        debug!(
+            "Final feature order: {:?}",
+            processed_features
+                .iter()
+                .map(|f| &f.feature.id)
+                .collect::<Vec<_>>()
+        );
 
-        // Collect mounts from all features
-        let mut feature_mounts = Vec::new();
-        for feature_result in &processed_features {
-            if let Some(ref mounts) = feature_result.feature.mounts {
-                // Convert feature::FeatureMount to devcontainer::Mount
-                for mount in mounts {
-                    match mount {
-                        crate::feature::FeatureMount::String(s) => {
-                            feature_mounts.push(crate::devcontainer::Mount::String(s.clone()));
-                        }
-                        crate::feature::FeatureMount::Structured(sm) => {
-                            let mount_type = match sm.mount_type {
-                                crate::feature::MountType::Bind => {
-                                    crate::devcontainer::MountType::Bind
-                                }
-                                crate::feature::MountType::Volume => {
-                                    crate::devcontainer::MountType::Volume
-                                }
-                            };
-                            feature_mounts.push(crate::devcontainer::Mount::Structured(
-                                crate::devcontainer::StructuredMount {
-                                    mount_type,
-                                    source: sm.source.clone(),
-                                    target: sm.target.clone(),
-                                },
-                            ));
-                        }
-                    }
-                }
-            }
-        }
+        let mut feature_install = String::new();
 
         let mut i = 0;
         for feature_result in processed_features {
-            let feature_path_name = self.copy_feature_to_build(&feature_result, &directory)?;
+            let feature_path_name = self.copy_feature_to_build(&feature_result, &directory_path)?;
             let feature_name = match &feature_result.feature_ref.source {
                 FeatureSource::Registry { registry } => &registry.name,
                 FeatureSource::Local { path } => &path
@@ -281,14 +261,19 @@ impl ContainerDriver {
             } else {
                 feature_install.push_str(&format!("FROM feature_{} AS feature_{} \n", i - 1, i));
             }
+            if let Some(env_vars) = &feature_result.feature.container_env {
+                for env_var in env_vars {
+                    feature_install.push_str(&format!("ENV {}={} \n", env_var.0, env_var.1));
+                }
+            }
             feature_install.push_str(&format!(
-                "COPY {}/* /tmp/features/{}/ \n",
+                "COPY {}/. /tmp/features/{}/ \n",
                 feature_path_name, feature_name
             ));
 
             feature_install.push_str(&format!(
-                "RUN chmod +x /tmp/features/{}/install.sh && . /tmp/features/{}/devcontainer-features.env && /tmp/features/{}/install.sh \n",
-                feature_name, feature_name, feature_name
+                "RUN /bin/bash -c \"cd /tmp/features/{} && chmod +x install.sh && . devcontainer-features.env && ./install.sh\" \n",
+                feature_name
             ));
 
             i += 1;
@@ -307,7 +292,7 @@ impl ContainerDriver {
 
         // Add dotfiles setup if repository is provided
         let dotfiles_setup = {
-            let dotfiles_helper_path = directory.path().join("dotfiles_helper.sh");
+            let dotfiles_helper_path = directory_path.join("dotfiles_helper.sh");
             let dotfiles_helper_content = r#"
 #!/bin/sh
 set -e
@@ -337,7 +322,7 @@ fi
                 .to_string()
         };
 
-        let dockerfile = directory.path().join("Dockerfile");
+        let dockerfile = directory_path.join("Dockerfile");
         File::create(&dockerfile)?;
 
         let env = Environment::new();
@@ -404,26 +389,61 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
 
         self.runtime.build(
             &dockerfile,
-            directory.path(),
+            &directory_path,
             &self.get_image_tag(&devcontainer_workspace),
         )?;
 
-        directory.close()?;
         Ok(())
     }
 
     fn copy_feature_to_build(
         &self,
         process: &FeatureProcessResult,
-        build_directory: &TempDir,
+        build_directory: &PathBuf,
     ) -> anyhow::Result<String> {
-        let directory_name = format!(
-            "{}-{}",
-            process.path.file_name().unwrap().to_string_lossy(),
-            process.feature.version
-        );
-        let feature_dest = build_directory.path().join(&directory_name);
-        copy_dir(&process.path, &feature_dest)?;
+        let feature_dest = build_directory.join(&process.directory_name());
+
+        let mut options = fs_extra::dir::CopyOptions::new();
+        options.overwrite = true;
+        options.copy_inside = true;
+        fs_extra::dir::copy(&process.path, &feature_dest, &options)
+            .map_err(|e| anyhow::anyhow!("Failed to copy feature directory: {}", e))?;
+
+        // Create env variable file with merged options (defaults + user overrides)
+        let mut feature_options = serde_json::json!({});
+
+        // Start with default values from feature definition
+        if let Some(options_map) = &process.feature.options {
+            for (key, option) in options_map {
+                feature_options
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(key.clone(), option.default.clone());
+            }
+        }
+
+        // Override with user-specified options from feature_ref
+        if let Some(user_opts) = process.feature_ref.options.as_object() {
+            for (key, value) in user_opts {
+                feature_options
+                    .as_object_mut()
+                    .unwrap()
+                    .insert(key.clone(), value.clone());
+            }
+        }
+
+        // Create env variable file for feature installation
+        let env_file_path = feature_dest.join("devcontainer-features.env");
+        let mut env_file = File::create(&env_file_path)?;
+        for (key, value) in feature_options.as_object().unwrap() {
+            use std::io::Write;
+            writeln!(
+                env_file,
+                "export {}={}",
+                key.to_uppercase(),
+                value.as_str().unwrap_or("")
+            )?;
+        }
 
         Ok(feature_dest
             .file_name()

@@ -24,16 +24,14 @@
 //!
 //! Implementation of ContainerRuntime trait for Apple's `container` CLI.
 
-use std::io::{BufRead, BufReader};
-use std::path::Path;
-use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::{
+    path::Path,
+    process::{Command, Stdio},
+};
 
 use anyhow::bail;
-use indicatif::ProgressBar;
-use tracing::trace;
 
-use super::ContainerRuntime;
+use super::{ContainerRuntime, stream_build_output};
 
 /// Apple's container CLI runtime implementation.
 pub struct AppleRuntime;
@@ -62,7 +60,7 @@ impl ContainerRuntime for AppleRuntime {
         context_path: &Path,
         image_tag: &str,
     ) -> anyhow::Result<()> {
-        let mut child = Command::new("container")
+        let child = Command::new("container")
             .arg("build")
             .arg("-f")
             .arg(dockerfile_path)
@@ -73,39 +71,8 @@ impl ContainerRuntime for AppleRuntime {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
+        let result = stream_build_output(child)?;
 
-        println!("Building Image..");
-        let bar = ProgressBar::new_spinner();
-        bar.enable_steady_tick(Duration::from_millis(150));
-
-        // Stream stdout in a separate thread
-        let stdout_thread = stdout.map(|stdout| {
-            std::thread::spawn(move || {
-                let reader = BufReader::new(stdout);
-                for line in reader.lines().map_while(Result::ok) {
-                    trace!("{}", line);
-                }
-            })
-        });
-
-        // Stream stderr in main thread
-        if let Some(stderr) = stderr {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
-                trace!("{}", line);
-            }
-        }
-
-        // Wait for stdout thread to complete
-        if let Some(handle) = stdout_thread {
-            let _ = handle.join();
-        }
-
-        let result = child.wait()?;
-
-        bar.finish_with_message("Building image complete");
         if !result.success() {
             bail!("Container build command failed")
         }
