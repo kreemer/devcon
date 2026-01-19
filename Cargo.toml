@@ -42,6 +42,7 @@ devcon-proto = { path = "proto" }
 prost = "0.13"
 bytes = "1.9"
 console = "0.16.2"
+open = "5.3"
 
 [dev-dependencies]
 assert_cmd = "2.1.1"

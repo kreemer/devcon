@@ -97,9 +97,7 @@ impl ContainerRuntime for DockerRuntime {
             .arg("-v")
             .arg(volume_mount)
             .arg("--label")
-            .arg(label)
-            .arg("-p")
-            .arg("15000:15000");
+            .arg(label);
 
         // Add environment variables
         for env_var in env_vars {
