@@ -93,6 +93,13 @@ pub fn handle_config_command(create_if_missing: bool) -> Result<()> {
 # env_variables:
 #   - VAR1=value1
 #   - LOCALENV
+#
+# Agent Configuration:
+# Use either agent_binary_url for a precompiled binary, or agent_git_repository for compilation
+# agent_binary_url: https://github.com/kreemer/devcon/releases/latest/download/devcon-agent-macos-arm64
+# agent_git_repository: https://github.com/kreemer/devcon.git
+# agent_git_branch: main
+# agent_disable: false
 "#;
 
         file.write_all(documentation.as_bytes())?;
@@ -100,6 +107,10 @@ pub fn handle_config_command(create_if_missing: bool) -> Result<()> {
         println!("Config file created at {}", config_path.display());
         return Ok(());
     }
+
+    let config = Config::load()?;
+
+    trace!("Config loaded {:?}", config);
 
     println!("{}", config_path.display());
     Ok(())
@@ -211,13 +222,9 @@ pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
     };
 
     let driver = ContainerDriver::new(config, runtime);
-    let listener_handle = driver.start(devcontainer_workspace, &[])?;
+    driver.start(devcontainer_workspace, &[])?;
 
     println!("Container started. Agent listener running. Press Ctrl+C to stop.");
-
-    // Wait for the listener thread (keeps the process alive)
-    // This will run until the thread exits or the process is interrupted
-    let _ = listener_handle.join();
 
     Ok(())
 }

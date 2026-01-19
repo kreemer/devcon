@@ -106,6 +106,33 @@ pub struct Config {
         skip_serializing_if = "is_default_runtime"
     )]
     pub runtime: String,
+
+    /// Agent binary URL for precompiled agent.
+    ///
+    /// If set, the agent will be downloaded from this URL instead of being compiled.
+    /// The URL should point to a precompiled devcon-agent binary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_binary_url: Option<String>,
+
+    /// Git repository URL for agent source code.
+    ///
+    /// If set (and agent_binary_url is not set), the agent will be compiled from this repository.
+    /// Defaults to "https://github.com/kreemer/devcon.git" if not specified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_git_repository: Option<String>,
+
+    /// Git branch to checkout when compiling agent from source.
+    ///
+    /// Only used when compiling from git repository.
+    /// Defaults to "main" if not specified.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_git_branch: Option<String>,
+
+    /// Should use the agent for port forwarding / browser integration
+    ///
+    /// Disable the installation of the devcon agent in the container
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_disable: Option<bool>,
 }
 
 fn default_runtime() -> String {

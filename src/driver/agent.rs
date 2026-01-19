@@ -20,10 +20,27 @@ pub struct AgentConfig {
     pub install_script: String,
     /// Additional options for the feature
     pub options: Option<serde_json::Value>,
+    /// URL to download precompiled agent binary
+    pub binary_url: Option<String>,
+    /// Git repository URL for agent source
+    pub git_repository: Option<String>,
+    /// Git branch to checkout
+    pub git_branch: Option<String>,
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
+        Self::new(None, None, None)
+    }
+}
+
+impl AgentConfig {
+    /// Create a new AgentConfig with optional binary URL and git settings
+    pub fn new(
+        binary_url: Option<String>,
+        git_repository: Option<String>,
+        git_branch: Option<String>,
+    ) -> Self {
         let env = Environment::new();
         let template = env
             .template_from_str(
@@ -33,16 +50,26 @@ impl Default for AgentConfig {
 set -e
 echo "Installing DevCon Agent..."
 
+{% if binary_url %}
+# Download precompiled binary
+echo "Downloading precompiled agent from {{ binary_url }}..."
+curl -L -o /usr/local/bin/devcon-agent "{{ binary_url }}"
+chmod +x /usr/local/bin/devcon-agent
+{% else %}
+# Compile from source
+echo "Compiling agent from source..."
+
 echo $PATH
 
 . "/usr/local/cargo/env" 
 
-git clone https://github.com/kreemer/devcon.git /tmp/devcon
+git clone {{ git_repository }} /tmp/devcon
 cd /tmp/devcon
-git checkout support_reference
+git checkout {{ git_branch }}
 cargo b --release --workspace --bin devcon-agent
 mv target/release/devcon-agent /usr/local/bin/devcon-agent
 rm -rf /tmp/devcon
+{% endif %}
 
 echo '#!/bin/bash' > /usr/local/bin/devcon-browser
 echo 'devcon-agent open-url $1' >> /usr/local/bin/devcon-browser
@@ -53,8 +80,16 @@ echo "DevCon Agent installed successfully."
             )
             .expect("Failed to create template");
 
+        let git_repo =
+            git_repository.unwrap_or_else(|| "https://github.com/kreemer/devcon.git".to_string());
+        let git_br = git_branch.unwrap_or_else(|| "main".to_string());
+
         let contents = template
-            .render(minijinja::context! {})
+            .render(minijinja::context! {
+                binary_url => binary_url,
+                git_repository => git_repo,
+                git_branch => git_br,
+            })
             .expect("Could not create install script");
 
         Self {
@@ -64,6 +99,9 @@ echo "DevCon Agent installed successfully."
             description: Some("DevCon Agent for managing devcontainer features".to_string()),
             install_script: contents,
             options: None,
+            binary_url,
+            git_repository: Some(git_repo),
+            git_branch: Some(git_br),
         }
     }
 }
@@ -164,6 +202,9 @@ mod tests {
             description: Some("A test feature".to_string()),
             install_script: "#!/bin/bash\necho 'Installing...'".to_string(),
             options: None,
+            binary_url: None,
+            git_repository: None,
+            git_branch: None,
         };
 
         let mut agent = Agent::new(config);
@@ -172,5 +213,50 @@ mod tests {
         assert!(path.exists());
         assert!(path.join("devcontainer-feature.json").exists());
         assert!(path.join("install.sh").exists());
+    }
+
+    #[test]
+    fn test_agent_with_binary_url() {
+        let config = AgentConfig::new(
+            Some("https://example.com/devcon-agent".to_string()),
+            None,
+            None,
+        );
+
+        assert!(config.binary_url.is_some());
+        assert!(config.install_script.contains("curl"));
+        assert!(
+            config
+                .install_script
+                .contains("https://example.com/devcon-agent")
+        );
+    }
+
+    #[test]
+    fn test_agent_with_git_repository() {
+        let config = AgentConfig::new(
+            None,
+            Some("https://github.com/custom/repo.git".to_string()),
+            Some("develop".to_string()),
+        );
+
+        assert!(config.binary_url.is_none());
+        assert!(config.install_script.contains("git clone"));
+        assert!(
+            config
+                .install_script
+                .contains("https://github.com/custom/repo.git")
+        );
+        assert!(config.install_script.contains("git checkout develop"));
+    }
+
+    #[test]
+    fn test_agent_default_values() {
+        let config = AgentConfig::default();
+
+        assert_eq!(config.binary_url, None);
+        assert!(config.git_repository.is_some());
+        assert!(config.git_branch.is_some());
+        assert!(config.install_script.contains("git clone"));
     }
 }

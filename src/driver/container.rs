@@ -215,10 +215,17 @@ impl ContainerDriver {
 
         // Add agent installation feature to the list
         // The agent's dependencies will be resolved along with all other features
-        let agent_path = agent::Agent::new(AgentConfig::default()).generate()?;
-        features.push(FeatureRef::new(FeatureSource::Local { path: agent_path }));
-
-        debug!("Initial feature list (including agent): {:?}", features);
+        if !(self.config.agent_disable.unwrap_or(false)) {
+            let agent_config = AgentConfig::new(
+                self.config.agent_binary_url.clone(),
+                self.config.agent_git_repository.clone(),
+                self.config.agent_git_branch.clone(),
+            );
+            debug!("Using agent configuration: {:?}", agent_config);
+            let agent_path = agent::Agent::new(agent_config).generate()?;
+            features.push(FeatureRef::new(FeatureSource::Local { path: agent_path }));
+        }
+        debug!("Initial feature list: {:?}", features);
 
         // Process all features including dependency resolution and topological sorting
         let mut processed_features = process_features(&features)?;
@@ -501,15 +508,15 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         &self,
         devcontainer_workspace: Workspace,
         env_variables: &[String],
-    ) -> anyhow::Result<JoinHandle<()>> {
+    ) -> anyhow::Result<()> {
         let handles = self.runtime.list()?;
         let existing_handle = handles
             .iter()
             .find(|(name, _)| name == &self.get_container_name(&devcontainer_workspace));
 
-        if let Some((_, handle)) = existing_handle {
-            info!("Container already running, starting listener for existing container");
-            return self.start_agent_listener(&devcontainer_workspace, handle.as_ref());
+        if let Some((_, _)) = existing_handle {
+            info!("Container already running");
+            return Ok(());
         }
 
         let images = self.runtime.images()?;
@@ -582,27 +589,8 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             }
         }
 
-        // Add bind mount for message queue
-        let host_message_dir = std::env::temp_dir().join(format!(
-            "devcon-messages-{}",
-            devcontainer_workspace.get_sanitized_name()
-        ));
-        fs::create_dir_all(&host_message_dir)?;
-
-        all_mounts.push(crate::devcontainer::Mount::Structured(
-            crate::devcontainer::StructuredMount {
-                mount_type: crate::devcontainer::MountType::Bind,
-                source: Some(host_message_dir.to_string_lossy().to_string()),
-                target: "/var/run/devcon/messages".to_string(),
-            },
-        ));
-
         // Process environment variables
         let mut processed_env_vars = Vec::new();
-
-        // Add DEVCON_MESSAGE_DIR environment variable
-        let message_dir = "/var/run/devcon/messages";
-        processed_env_vars.push(format!("DEVCON_MESSAGE_DIR={}", message_dir));
 
         for env_var in env_variables {
             if env_var.contains("=") {
@@ -702,11 +690,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             None => { /* No onCreateCommand specified */ }
         };
 
-        // Start listener for agent messages and pass the container handle
-        let listener_handle =
-            self.start_agent_listener(&devcontainer_workspace, handle.as_ref())?;
-
-        Ok(listener_handle)
+        Ok(())
     }
 
     /// Shells into a started container.
@@ -881,130 +865,6 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
     /// A wrapped command string ready for execution.
     fn wrap_lifecycle_command(&self, _devcontainer_workspace: &Workspace, cmd: &str) -> String {
         cmd.to_string()
-    }
-
-    /// Starts a background listener for agent messages using file-based IPC
-    ///
-    /// This implementation uses a file-based message queue that works across
-    /// Docker Desktop's virtualization boundary on both Mac and Linux.
-    ///
-    /// Messages are written by the agent to: /var/run/devcon/messages/
-    /// The host monitors this directory via a bind mount at: /tmp/devcon-messages-{id}/
-    ///
-    /// Returns a JoinHandle that can be used to wait for the listener thread.
-    fn start_agent_listener(
-        &self,
-        devcontainer_workspace: &Workspace,
-        _container_handle: &dyn super::runtime::ContainerHandle,
-    ) -> anyhow::Result<JoinHandle<()>> {
-        info!("Starting agent message listener using file-based IPC...");
-
-        // Create message queue directory on host
-        let message_dir = std::env::temp_dir().join(format!(
-            "devcon-messages-{}",
-            devcontainer_workspace.get_sanitized_name()
-        ));
-
-        fs::create_dir_all(&message_dir).context("Failed to create message queue directory")?;
-
-        info!(
-            "Agent message queue at: {} (mounted to container at /var/run/devcon/messages/)",
-            message_dir.display()
-        );
-
-        // Spawn listener thread
-        let handle = thread::spawn(move || {
-            info!("Agent listener thread started, monitoring for messages...");
-            let mut processed_messages = std::collections::HashSet::new();
-
-            loop {
-                // Scan for new message files
-                if let Ok(entries) = fs::read_dir(&message_dir) {
-                    for entry in entries.flatten() {
-                        let path = entry.path();
-
-                        // Only process .msg files that haven't been processed
-                        if path.extension().and_then(|s| s.to_str()) == Some("msg") {
-                            let file_name = path
-                                .file_name()
-                                .and_then(|n| n.to_str())
-                                .unwrap_or("")
-                                .to_string();
-
-                            if processed_messages.contains(&file_name) {
-                                continue;
-                            }
-
-                            // Read and process the message
-                            match Self::read_message_file(&path) {
-                                Ok(msg) => {
-                                    Self::process_agent_message(&msg);
-                                    processed_messages.insert(file_name.clone());
-
-                                    // Delete the processed message file
-                                    let _ = fs::remove_file(&path);
-                                }
-                                Err(e) => {
-                                    warn!("Failed to read message file {}: {}", path.display(), e);
-                                    // Mark as processed to avoid repeated errors
-                                    processed_messages.insert(file_name);
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Sleep before next poll
-                thread::sleep(Duration::from_millis(100));
-            }
-        });
-
-        Ok(handle)
-    }
-
-    /// Reads a protobuf message from a file
-    fn read_message_file(path: &PathBuf) -> anyhow::Result<AgentMessage> {
-        let mut file = File::open(path).context("Failed to open message file")?;
-
-        let mut buffer = Vec::new();
-        file.read_to_end(&mut buffer)
-            .context("Failed to read message file")?;
-
-        AgentMessage::decode(&buffer[..])
-            .map_err(|e| anyhow::anyhow!("Failed to decode protobuf message: {}", e))
-    }
-
-    /// Processes an agent message and takes appropriate action
-    fn process_agent_message(msg: &AgentMessage) {
-        if let Some(ref message) = msg.message {
-            match message {
-                agent_message::Message::StartPortForward(req) => {
-                    let port = req.port as u16;
-                    info!(
-                        "Port {} is now forwarded - accessible at http://localhost:{}",
-                        port, port
-                    );
-                }
-                agent_message::Message::StopPortForward(req) => {
-                    let port = req.port as u16;
-                    debug!("Port forwarding stopped for port {}", port);
-                }
-                agent_message::Message::OpenUrl(req) => {
-                    info!("Opening URL: {}", req.url);
-
-                    // Try to open the URL on the host
-                    #[cfg(target_os = "macos")]
-                    {
-                        let _ = std::process::Command::new("open").arg(&req.url).spawn();
-                    }
-
-                    #[cfg(target_os = "linux")]
-                    {
-                        let _ = std::process::Command::new("xdg-open").arg(&req.url).spawn();
-                    }
-                }
-            }
-        }
     }
 }
 
