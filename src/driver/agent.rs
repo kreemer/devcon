@@ -33,17 +33,9 @@ impl Default for AgentConfig {
 set -e
 echo "Installing DevCon Agent..."
 
-echo "Install protoc..."
-PB_REL="https://github.com/protocolbuffers/protobuf/releases"
-curl -LO $PB_REL/download/v30.2/protoc-30.2-linux-x86_64.zip
-unzip protoc-30.2-linux-x86_64.zip -d $HOME/.local
-export PATH="$PATH:$HOME/.local/bin"
+echo $PATH
 
-if [ ! -f $HOME/.cargo/env ]; then
-    echo "Installing Rust toolchain..."
-    curl https://sh.rustup.rs -sSf | sh -s -- -y 
-fi
-. "$HOME/.cargo/env"  
+. "/usr/local/cargo/env" 
 
 git clone https://github.com/kreemer/devcon.git /tmp/devcon
 cd /tmp/devcon
@@ -111,6 +103,10 @@ impl Agent {
             "id": self.config.id,
             "version": self.config.version,
             "name": self.config.name,
+            "dependsOn": {
+                "ghcr.io/devcontainers/features/rust": {},
+                "ghcr.io/devcontainers-extra/features/protoc": {}
+            },
             "mounts": [
                 {
                     "type": "bind",

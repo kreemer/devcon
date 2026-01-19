@@ -26,10 +26,126 @@
 //! allowing DevCon to work with different container CLIs (Apple's container,
 //! Docker, Podman, etc.).
 
-use std::path::Path;
+use std::{
+    collections::VecDeque,
+    io::{BufRead, BufReader},
+    path::Path,
+    process::Child,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
+
+use indicatif::{ProgressBar, ProgressStyle};
 
 pub mod apple;
 pub mod docker;
+
+/// Stream build output from a child process with a rolling window display.
+///
+/// This function:
+/// - Captures stdout and stderr from the child process
+/// - Maintains a rolling buffer of the last 10 lines
+/// - Displays the buffer in a progress spinner
+/// - Prints the final buffered output after the process completes
+///
+/// # Arguments
+///
+/// * `child` - The child process to stream output from
+///
+/// # Returns
+///
+/// Returns `Ok(ExitStatus)` if the process completes, `Err` if there's an I/O error
+pub fn stream_build_output(mut child: Child) -> anyhow::Result<std::process::ExitStatus> {
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+
+    println!("Building Image..");
+
+    // Shared buffer for last 10 lines
+    let lines_buffer: Arc<Mutex<VecDeque<String>>> =
+        Arc::new(Mutex::new(VecDeque::with_capacity(10)));
+    let buffer_clone = Arc::clone(&lines_buffer);
+
+    let bar = ProgressBar::new_spinner()
+        .with_style(ProgressStyle::default_spinner().template("{spinner}\n{msg}")?);
+    bar.enable_steady_tick(Duration::from_millis(100));
+
+    let bar_clone = bar.clone();
+
+    // Stream stdout in a separate thread
+    let stdout_thread = stdout.map(|stdout| {
+        let buffer = Arc::clone(&lines_buffer);
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines().map_while(Result::ok) {
+                let mut buf = buffer.lock().unwrap();
+                if buf.len() >= 10 {
+                    buf.pop_front();
+                }
+                buf.push_back(line);
+            }
+        })
+    });
+
+    // Stream stderr in a separate thread
+    let stderr_thread = stderr.map(|stderr| {
+        let buffer = Arc::clone(&buffer_clone);
+        std::thread::spawn(move || {
+            let reader = BufReader::new(stderr);
+            for line in reader.lines().map_while(Result::ok) {
+                let mut buf = buffer.lock().unwrap();
+                if buf.len() >= 10 {
+                    buf.pop_front();
+                }
+                buf.push_back(line);
+            }
+        })
+    });
+
+    // Update progress bar with buffered lines
+    let display_buffer = Arc::clone(&buffer_clone);
+    let update_thread = std::thread::spawn(move || {
+        loop {
+            let buf = display_buffer.lock().unwrap();
+            if !buf.is_empty() {
+                let display_text = buf
+                    .iter()
+                    .map(|s| s.as_str())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                bar_clone.set_message(display_text);
+            }
+            drop(buf);
+            std::thread::sleep(Duration::from_millis(100));
+        }
+    });
+
+    // Wait for stdout thread to complete
+    if let Some(handle) = stdout_thread {
+        let _ = handle.join();
+    }
+
+    // Wait for stderr thread to complete
+    if let Some(handle) = stderr_thread {
+        let _ = handle.join();
+    }
+
+    let result = child.wait()?;
+
+    // Stop the update thread by finishing the progress bar
+    bar.finish_and_clear();
+    drop(update_thread);
+
+    // Print final buffered output
+    let final_buffer = buffer_clone.lock().unwrap();
+    for line in final_buffer.iter() {
+        println!("{}", line);
+    }
+
+    println!("Building image complete");
+
+    Ok(result)
+}
 
 /// Trait for container runtime implementations.
 ///

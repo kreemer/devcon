@@ -25,17 +25,13 @@
 //! Implementation of ContainerRuntime trait for Docker CLI.
 
 use std::{
-    io::{BufRead, BufReader},
     path::Path,
     process::{Command, Stdio},
-    time::Duration,
 };
 
 use anyhow::bail;
-use indicatif::ProgressBar;
-use tracing::trace;
 
-use super::ContainerRuntime;
+use super::{ContainerRuntime, stream_build_output};
 
 /// Docker CLI runtime implementation.
 pub struct DockerRuntime;
@@ -64,7 +60,7 @@ impl ContainerRuntime for DockerRuntime {
         context_path: &Path,
         image_tag: &str,
     ) -> anyhow::Result<()> {
-        let mut child = Command::new("docker")
+        let child = Command::new("docker")
             .arg("build")
             .arg("-f")
             .arg(dockerfile_path)
@@ -75,39 +71,7 @@ impl ContainerRuntime for DockerRuntime {
             .stderr(Stdio::piped())
             .spawn()?;
 
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-
-        println!("Building Image..");
-        let bar = ProgressBar::new_spinner();
-        bar.enable_steady_tick(Duration::from_millis(150));
-
-        // Stream stdout in a separate thread
-        let stdout_thread = stdout.map(|stdout| {
-            std::thread::spawn(move || {
-                let reader = BufReader::new(stdout);
-                for line in reader.lines().map_while(Result::ok) {
-                    trace!("{}", line);
-                }
-            })
-        });
-
-        // Stream stderr in main thread
-        if let Some(stderr) = stderr {
-            let reader = BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
-                trace!("{}", line);
-            }
-        }
-
-        // Wait for stdout thread to complete
-        if let Some(handle) = stdout_thread {
-            let _ = handle.join();
-        }
-
-        let result = child.wait()?;
-
-        bar.finish_with_message("Building image complete");
+        let result = stream_build_output(child)?;
 
         if !result.success() {
             bail!("Docker build command failed")
