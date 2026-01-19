@@ -128,13 +128,6 @@ impl PortForwardManager {
         Ok(())
     }
 
-    /// Register a client stream waiting for a tunnel
-    #[allow(dead_code)]
-    fn register_pending_tunnel(&self, tunnel_id: u32, client_stream: TcpStream) {
-        let mut pending = self.pending_tunnels.lock().unwrap();
-        pending.insert(tunnel_id, client_stream);
-    }
-
     /// Get and remove a pending tunnel client stream
     fn take_pending_tunnel(&self, tunnel_id: u32) -> Option<TcpStream> {
         let mut pending = self.pending_tunnels.lock().unwrap();
@@ -173,6 +166,11 @@ fn handle_forwarded_connection(
     {
         let mut pending = pending_tunnels.lock().unwrap();
         pending.insert(tunnel_id, client_stream);
+        debug!(
+            "Stored pending client for tunnel_id={}, total pending: {}",
+            tunnel_id,
+            pending.len()
+        );
     }
 
     // Send tunnel request to agent over control connection
@@ -188,11 +186,34 @@ fn handle_forwarded_connection(
     drop(agent); // Release lock immediately
 
     debug!(
-        "Sent tunnel request to agent for port {}, tunnel_id={}, waiting for agent to connect back on port {}",
+        "Sent tunnel request to agent for port {}, tunnel_id={}, agent should connect back on port {}",
         container_port, tunnel_id, control_port
     );
 
-    Ok(())
+    // Wait up to 5 seconds for the tunnel to be established
+    // This keeps the client stream alive in pending_tunnels
+    let start = std::time::Instant::now();
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        // Check if tunnel was taken (meaning agent connected)
+        {
+            let pending = pending_tunnels.lock().unwrap();
+            if !pending.contains_key(&tunnel_id) {
+                debug!("Tunnel {} successfully established", tunnel_id);
+                return Ok(());
+            }
+        }
+
+        // Timeout after 5 seconds
+        if start.elapsed().as_secs() > 5 {
+            warn!("Timeout waiting for tunnel {} to be established", tunnel_id);
+            // Remove from pending to clean up
+            let mut pending = pending_tunnels.lock().unwrap();
+            pending.remove(&tunnel_id);
+            bail!("Tunnel establishment timeout");
+        }
+    }
 }
 
 /// Send a protobuf message over a TCP stream with length prefix
@@ -266,21 +287,30 @@ fn handle_connection(mut stream: TcpStream, manager: PortForwardManager) -> Resu
     match stream.peek(&mut peek_buf) {
         Ok(n) if n == 4 => {
             let first_u32 = u32::from_be_bytes(peek_buf);
+            const TUNNEL_MAGIC: u32 = 0x54554E4E; // ASCII "TUNN"
 
-            // Heuristic: if first 4 bytes look like a tunnel_id (small number < 1000000),
-            // treat as tunnel connection. Otherwise, treat as control connection.
-            // Control connections have length prefix which would be much larger for valid protobuf
-            if first_u32 < 1_000_000 {
-                // Likely a tunnel_id - handle as tunnel connection
-                stream.read_exact(&mut peek_buf)?; // Consume the tunnel_id bytes
-                let tunnel_id = u32::from_be_bytes(peek_buf);
+            debug!(
+                "Connection from {}, first 4 bytes: 0x{:08x}",
+                peer_addr, first_u32
+            );
+
+            // Check for tunnel magic prefix
+            if first_u32 == TUNNEL_MAGIC {
+                // This is a tunnel connection
+                stream.read_exact(&mut peek_buf)?; // Consume the magic bytes
+
+                // Read the tunnel_id
+                let mut tunnel_id_buf = [0u8; 4];
+                stream.read_exact(&mut tunnel_id_buf)?;
+                let tunnel_id = u32::from_be_bytes(tunnel_id_buf);
+
                 debug!(
                     "Detected tunnel connection from {} with tunnel_id={}",
                     peer_addr, tunnel_id
                 );
                 handle_tunnel_connection(stream, tunnel_id, manager)
             } else {
-                // Likely a protobuf message length - handle as control connection
+                // This is a control connection (protobuf message length)
                 debug!("Detected control connection from {}", peer_addr);
                 handle_agent_connection(stream, manager)
             }

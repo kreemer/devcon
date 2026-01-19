@@ -107,7 +107,11 @@ fn handle_tunnel_request(
     let mut tunnel_stream = TcpStream::connect(format!("{}:{}", host, control_port))?;
     eprintln!("Opened new tunnel connection to control server");
 
-    // Send tunnel_id as first 4 bytes to identify this connection
+    // Send magic prefix to identify this as a tunnel connection
+    const TUNNEL_MAGIC: u32 = 0x54554E4E; // ASCII "TUNN"
+    tunnel_stream.write_all(&TUNNEL_MAGIC.to_be_bytes())?;
+
+    // Send tunnel_id
     tunnel_stream.write_all(&tunnel_id.to_be_bytes())?;
     tunnel_stream.flush()?;
     eprintln!("Sent tunnel_id {} to control server", tunnel_id);
