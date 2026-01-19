@@ -17,11 +17,18 @@ message OpenUrl {
   string url = 1;
 }
 
+// Message from host to agent requesting a new tunnel connection
+message TunnelRequest {
+  uint32 port = 1;
+  uint32 tunnel_id = 2;
+}
+
 // Wrapper message for all agent communication
 message AgentMessage {
   oneof message {
     StartPortForward start_port_forward = 1;
     StopPortForward stop_port_forward = 2;
     OpenUrl open_url = 3;
+    TunnelRequest tunnel_request = 4;
   }
 }

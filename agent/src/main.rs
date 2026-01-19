@@ -91,15 +91,29 @@ fn connect_to_control_server(host: &str, port: u16) -> io::Result<TcpStream> {
     TcpStream::connect(addr)
 }
 
-/// Handle port forwarding requests - connect to local service and proxy data
-fn handle_tunnel_request(stream: &mut TcpStream, port: u16) -> io::Result<()> {
+/// Handle tunnel request - open NEW connection to control server and proxy data
+fn handle_tunnel_request(
+    host: &str,
+    control_port: u16,
+    service_port: u16,
+    tunnel_id: u32,
+) -> io::Result<()> {
     eprintln!(
-        "Tunnel request received for port {}, connecting to localhost:{} in container",
-        port, port
+        "Tunnel request received: tunnel_id={}, service_port={}, connecting to {}:{}",
+        tunnel_id, service_port, host, control_port
     );
 
+    // Open NEW connection to control server for this tunnel
+    let mut tunnel_stream = TcpStream::connect(format!("{}:{}", host, control_port))?;
+    eprintln!("Opened new tunnel connection to control server");
+
+    // Send tunnel_id as first 4 bytes to identify this connection
+    tunnel_stream.write_all(&tunnel_id.to_be_bytes())?;
+    tunnel_stream.flush()?;
+    eprintln!("Sent tunnel_id {} to control server", tunnel_id);
+
     // Connect to the local service in the container
-    let local_addr = format!("127.0.0.1:{}", port);
+    let local_addr = format!("127.0.0.1:{}", service_port);
     let local_stream = match TcpStream::connect(&local_addr) {
         Ok(s) => {
             eprintln!("Connected to local service at {}", local_addr);
@@ -114,32 +128,40 @@ fn handle_tunnel_request(stream: &mut TcpStream, port: u16) -> io::Result<()> {
         }
     };
 
-    // Clone streams for bidirectional proxying
-    let mut stream_read = stream.try_clone()?;
-    let mut stream_write = stream.try_clone()?;
+    // Proxy data bidirectionally
+    let mut tunnel_read = tunnel_stream.try_clone()?;
+    let mut tunnel_write = tunnel_stream;
     let mut local_read = local_stream.try_clone()?;
-    let mut local_write = local_stream.try_clone()?;
+    let mut local_write = local_stream;
 
-    // Spawn thread to copy from control connection to local service
+    // Spawn thread to copy from tunnel to local service
     let handle = std::thread::spawn(move || {
-        let result = std::io::copy(&mut stream_read, &mut local_write);
+        let result = std::io::copy(&mut tunnel_read, &mut local_write);
         let _ = local_write.shutdown(std::net::Shutdown::Write);
         result
     });
 
-    // Copy from local service to control connection in this thread
-    let result = std::io::copy(&mut local_read, &mut stream_write);
-    let _ = stream_write.shutdown(std::net::Shutdown::Write);
+    // Copy from local service to tunnel in this thread
+    let result = std::io::copy(&mut local_read, &mut tunnel_write);
+    let _ = tunnel_write.shutdown(std::net::Shutdown::Write);
 
     // Wait for the other direction to complete
     let _ = handle.join();
 
-    eprintln!("Tunnel closed for port {}", port);
+    eprintln!(
+        "Tunnel closed: tunnel_id={}, service_port={}",
+        tunnel_id, service_port
+    );
     result.map(|_| ())
 }
 
 /// Run port forward daemon for a specific port
-fn run_port_forward_daemon(stream: &mut TcpStream, port: u16) -> io::Result<()> {
+fn run_port_forward_daemon(
+    stream: &mut TcpStream,
+    port: u16,
+    host: &str,
+    control_port: u16,
+) -> io::Result<()> {
     eprintln!("Port forward daemon running for port {}", port);
 
     // Keep the connection alive and handle tunnel requests
@@ -147,13 +169,23 @@ fn run_port_forward_daemon(stream: &mut TcpStream, port: u16) -> io::Result<()> 
         match read_message(stream) {
             Ok(message) => {
                 match message.message {
-                    Some(agent_message::Message::StartPortForward(fwd)) => {
-                        eprintln!("Received tunnel request for port {}", fwd.port);
-                        if let Err(e) = handle_tunnel_request(stream, fwd.port as u16) {
-                            eprintln!("Error handling tunnel: {}", e);
-                            // Connection likely broken, exit
-                            break;
-                        }
+                    Some(agent_message::Message::TunnelRequest(req)) => {
+                        let service_port = req.port as u16;
+                        let tunnel_id = req.tunnel_id;
+                        eprintln!(
+                            "Received tunnel request: tunnel_id={}, service_port={}",
+                            tunnel_id, service_port
+                        );
+
+                        // Spawn new thread to handle this tunnel
+                        let host = host.to_string();
+                        std::thread::spawn(move || {
+                            if let Err(e) =
+                                handle_tunnel_request(&host, control_port, service_port, tunnel_id)
+                            {
+                                eprintln!("Error handling tunnel: {}", e);
+                            }
+                        });
                     }
                     _ => {
                         eprintln!("Received unexpected message: {:?}", message);
@@ -184,13 +216,25 @@ fn run_daemon(host: &str, port: u16) -> io::Result<()> {
         match read_message(&mut stream) {
             Ok(message) => {
                 eprintln!("Received message from host: {:?}", message);
-                // Handle incoming messages from host (e.g., port forward requests)
+                // Handle incoming messages from host
                 match message.message {
-                    Some(agent_message::Message::StartPortForward(fwd)) => {
-                        eprintln!("Received tunnel request for port {}", fwd.port);
-                        if let Err(e) = handle_tunnel_request(&mut stream, fwd.port as u16) {
-                            eprintln!("Error handling tunnel: {}", e);
-                        }
+                    Some(agent_message::Message::TunnelRequest(req)) => {
+                        let service_port = req.port as u16;
+                        let tunnel_id = req.tunnel_id;
+                        eprintln!(
+                            "Received tunnel request: tunnel_id={}, service_port={}",
+                            tunnel_id, service_port
+                        );
+
+                        // Spawn new thread to handle this tunnel
+                        let host = host.to_string();
+                        std::thread::spawn(move || {
+                            if let Err(e) =
+                                handle_tunnel_request(&host, port, service_port, tunnel_id)
+                            {
+                                eprintln!("Error handling tunnel: {}", e);
+                            }
+                        });
                     }
                     _ => {
                         eprintln!("Received message: {:?}", message);
@@ -228,7 +272,12 @@ fn main() {
                         Ok(_) => {
                             eprintln!("Port forward request sent, keeping connection alive...");
                             // Keep connection alive and handle any reverse tunnel requests
-                            run_port_forward_daemon(&mut stream, port)
+                            run_port_forward_daemon(
+                                &mut stream,
+                                port,
+                                &cli.control_host,
+                                cli.control_port,
+                            )
                         }
                         Err(e) => Err(e),
                     }

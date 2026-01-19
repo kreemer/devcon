@@ -53,15 +53,10 @@
 //! ```
 
 use std::fs::{self, File};
-use std::io::Read;
 use std::path::PathBuf;
-use std::thread::{self, JoinHandle};
-use std::time::Duration;
 
-use anyhow::{Context, bail};
-use devcon_proto::{AgentMessage, agent_message};
+use anyhow::bail;
 use minijinja::Environment;
-use prost::Message as _;
 use tempfile::TempDir;
 use tracing::{debug, info, trace, warn};
 

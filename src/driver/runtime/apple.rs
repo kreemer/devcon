@@ -236,33 +236,4 @@ impl ContainerRuntime for AppleRuntime {
 
         Ok(result)
     }
-
-    fn get_ip(&self, container_handle: &dyn super::ContainerHandle) -> anyhow::Result<String> {
-        let output = Command::new("container")
-            .arg("inspect")
-            .arg(container_handle.id())
-            .output()?;
-
-        if !output.status.success() {
-            bail!("Failed to inspect container: {}", container_handle.id());
-        }
-
-        let inspect_output = String::from_utf8_lossy(&output.stdout);
-        let container_info: serde_json::Value = serde_json::from_str(&inspect_output)?;
-
-        // Apple container's IP is typically in the network configuration
-        let ip = container_info["network"]["ip"]
-            .as_str()
-            .unwrap_or_default()
-            .to_string();
-
-        if ip.is_empty() {
-            bail!(
-                "No IP address found for container: {}",
-                container_handle.id()
-            );
-        }
-
-        Ok(ip)
-    }
 }
