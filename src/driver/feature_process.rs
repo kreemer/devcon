@@ -38,7 +38,6 @@ use std::{
 };
 
 use anyhow::{Ok, bail};
-use indicatif::ProgressBar;
 use tempfile::TempDir;
 use tracing::{debug, info};
 
@@ -114,29 +113,26 @@ pub fn process_features<'a>(
     features: &'a [FeatureRef],
 ) -> anyhow::Result<Vec<FeatureProcessResult>> {
     println!("Processing features..");
-    let bar = ProgressBar::new(u64::try_from(features.len())?);
     let mut initial_results: Vec<FeatureProcessResult> = vec![];
 
     // Process initial features
     for feature_ref in features {
         match &feature_ref.source {
             Registry { registry, .. } => {
-                bar.println(format!("Processing feature {}", registry.name))
+                println!("Processing feature {}", registry.name)
             }
-            Local { path } => bar.println(format!(
+            Local { path } => println!(
                 "Processing feature {}",
                 path.canonicalize()?
                     .file_name()
                     .ok_or_else(|| anyhow::anyhow!("Could not get basename of directory"))?
                     .to_string_lossy()
                     .to_string()
-            )),
+            ),
         }
         let feature_result = process_feature(feature_ref)?;
         initial_results.push(feature_result);
-        bar.inc(1);
     }
-    bar.finish();
 
     // Resolve all dependencies (transitive)
     println!("Resolving feature dependencies..");
@@ -255,6 +251,7 @@ fn resolve_all_dependencies(
             };
 
             // Process the dependency
+            println!("Downloading dependency feature: {}", dep_id);
             let dep_result = process_feature(&dep_ref)?;
             let dep_feature_id = dep_result.feature.id.clone();
 

@@ -43,6 +43,7 @@ use crate::{
     config::Config,
     driver::{
         container::ContainerDriver,
+        control_server,
         runtime::{apple::AppleRuntime, docker::DockerRuntime},
     },
     workspace::Workspace,
@@ -248,6 +249,30 @@ pub fn handle_shell_command(path: PathBuf, _env: &[String]) -> anyhow::Result<()
     let driver = ContainerDriver::new(config, runtime);
     driver.shell(devcontainer_workspace)?;
     Ok(())
+}
+
+/// Handles the serve command to start the control server.
+///
+/// This function starts a TCP server that listens for connections from
+/// container agents and manages port forwarding requests.
+///
+/// # Arguments
+///
+/// * `port` - The port number to listen on for agent connections
+///
+/// # Errors
+///
+/// Returns an error if the server fails to start or bind to the port.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use devcon::command::handle_serve_command;
+/// handle_serve_command(15000)?;
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+pub fn handle_serve_command(port: u16) -> Result<()> {
+    control_server::start_control_server(port)
 }
 
 #[cfg(test)]

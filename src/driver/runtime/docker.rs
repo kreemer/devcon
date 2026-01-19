@@ -97,7 +97,9 @@ impl ContainerRuntime for DockerRuntime {
             .arg("-v")
             .arg(volume_mount)
             .arg("--label")
-            .arg(label);
+            .arg(label)
+            .arg("-p")
+            .arg("15000:15000");
 
         // Add environment variables
         for env_var in env_vars {
@@ -248,5 +250,29 @@ impl ContainerRuntime for DockerRuntime {
         }
 
         Ok(result)
+    }
+
+    fn get_ip(&self, container_handle: &dyn super::ContainerHandle) -> anyhow::Result<String> {
+        let output = Command::new("docker")
+            .arg("inspect")
+            .arg("--format")
+            .arg("{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}")
+            .arg(container_handle.id())
+            .output()?;
+
+        if !output.status.success() {
+            bail!("Failed to inspect container: {}", container_handle.id());
+        }
+
+        let ip = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+        if ip.is_empty() {
+            bail!(
+                "No IP address found for container: {}",
+                container_handle.id()
+            );
+        }
+
+        Ok(ip)
     }
 }
