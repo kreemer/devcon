@@ -210,7 +210,13 @@ pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
     };
 
     let driver = ContainerDriver::new(config, runtime);
-    driver.start(devcontainer_workspace, &[])?;
+    let listener_handle = driver.start(devcontainer_workspace, &[])?;
+
+    println!("Container started. Agent listener running. Press Ctrl+C to stop.");
+
+    // Wait for the listener thread (keeps the process alive)
+    // This will run until the thread exits or the process is interrupted
+    let _ = listener_handle.join();
 
     Ok(())
 }

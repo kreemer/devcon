@@ -5,17 +5,16 @@
 use clap::{Parser, Subcommand};
 use devcon_proto::{AgentMessage, OpenUrl, StartPortForward, StopPortForward, agent_message};
 use prost::Message;
-use std::io::{self, Write};
-use std::os::unix::net::UnixStream;
+use std::io;
 use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "devcon-agent")]
 #[command(about = "DevCon agent", long_about = None)]
 struct Cli {
-    /// Path to the Unix domain socket
-    #[arg(short, long, env = "DEVCON_SOCKET")]
-    socket: PathBuf,
+    /// Path to the message queue directory
+    #[arg(short, long, env = "DEVCON_MESSAGE_DIR", default_value = "/var/run/devcon/messages")]
+    message_dir: PathBuf,
 
     #[command(subcommand)]
     command: Commands,
@@ -43,18 +42,33 @@ enum Commands {
     },
 }
 
-fn send_message(socket_path: &PathBuf, msg: &AgentMessage) -> io::Result<()> {
+fn send_message(message_dir: &PathBuf, msg: &AgentMessage) -> io::Result<()> {
+    // Create message directory if it doesn't exist
+    std::fs::create_dir_all(message_dir)?;
+    
+    // Encode the protobuf message
     let mut buf = Vec::new();
     msg.encode(&mut buf)
         .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
-    // Connect to the Unix domain socket
-    let mut stream = UnixStream::connect(socket_path)?;
+    // Generate unique filename with timestamp and random component
+    use std::time::SystemTime;
+    let timestamp = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_millis();
+    let random = std::process::id(); // Use PID as random component
+    let nanos = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .subsec_nanos();
+    let filename = format!("{}-{}-{}.msg", timestamp, random, nanos);
+    let filepath = message_dir.join(&filename);
 
-    // Write length-prefixed message to the socket
-    let len = buf.len() as u32;
-    stream.write_all(&len.to_be_bytes())?;
-    stream.write_all(&buf)?;
+    // Write message to temp file, then rename atomically
+    let temp_path = message_dir.join(format!(".tmp-{}-{}", random, nanos));
+    std::fs::write(&temp_path, &buf)?;
+    std::fs::rename(&temp_path, &filepath)?;
 
     Ok(())
 }
@@ -69,7 +83,7 @@ fn main() {
                     port: port as u32,
                 })),
             };
-            send_message(&cli.socket, &msg)
+            send_message(&cli.message_dir, &msg)
         }
         Commands::StopPortForward { port } => {
             let msg = AgentMessage {
@@ -77,13 +91,13 @@ fn main() {
                     port: port as u32,
                 })),
             };
-            send_message(&cli.socket, &msg)
+            send_message(&cli.message_dir, &msg)
         }
         Commands::OpenUrl { url } => {
             let msg = AgentMessage {
                 message: Some(agent_message::Message::OpenUrl(OpenUrl { url })),
             };
-            send_message(&cli.socket, &msg)
+            send_message(&cli.message_dir, &msg)
         }
     };
 
