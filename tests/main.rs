@@ -1,5 +1,4 @@
 #[cfg(test)]
-#[cfg(target_os = "macos")]
 mod tests {
     use assert_cmd::cargo::cargo_bin_cmd;
 
@@ -39,7 +38,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(target_os = "macos")]
     fn test_build_name() {
         let temp_dir = tempfile::tempdir().unwrap();
         let container_content = r#"

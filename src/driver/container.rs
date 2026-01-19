@@ -52,11 +52,8 @@
 //! # }
 //! ```
 
-use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Read;
-use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
 use std::thread;
 
 use anyhow::{Context, bail};
@@ -64,7 +61,6 @@ use devcon_proto::{AgentMessage, agent_message};
 use dircpy::copy_dir;
 use minijinja::Environment;
 use prost::Message as _;
-use serde::{Deserialize, Serialize};
 use tempfile::TempDir;
 use tracing::{debug, info, trace, warn};
 
@@ -72,11 +68,8 @@ use crate::devcontainer::{FeatureRef, FeatureSource};
 use crate::driver::agent::{self, AgentConfig};
 use crate::driver::feature_process::FeatureProcessResult;
 use crate::{
-    config::Config,
-    devcontainer::{LifecycleCommand, OnAutoForward, PortAttributes},
-    driver::feature_process::process_features,
-    driver::runtime::ContainerRuntime,
-    workspace::Workspace,
+    config::Config, devcontainer::LifecycleCommand, driver::feature_process::process_features,
+    driver::runtime::ContainerRuntime, workspace::Workspace,
 };
 
 /// Driver for managing container build and runtime operations.
@@ -89,7 +82,19 @@ pub struct ContainerDriver {
 }
 
 impl ContainerDriver {
-    /// Creates a new ContainerDriver with the specified runtime.
+    /// Creates a new container driver.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use devcon::driver::ContainerDriver;
+    /// # use devcon::config::Config;
+    /// # use devcon::runtime::docker::DockerRuntime;
+    /// let config = Config::load()?;
+    /// let runtime = Box::new(DockerRuntime::new()?);
+    /// let driver = ContainerDriver::new(config, runtime);
+    /// # Ok::<(), anyhow::Error>(())
+    /// ```
     pub fn new(config: Config, runtime: Box<dyn ContainerRuntime>) -> Self {
         Self { config, runtime }
     }

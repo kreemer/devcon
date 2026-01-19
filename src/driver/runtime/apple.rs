@@ -31,7 +31,7 @@ use std::time::Duration;
 
 use anyhow::bail;
 use indicatif::ProgressBar;
-use tracing::{info, trace};
+use tracing::trace;
 
 use super::ContainerRuntime;
 
@@ -152,7 +152,10 @@ impl ContainerRuntime for AppleRuntime {
                         }
                         crate::devcontainer::MountType::Volume => {
                             if let Some(source) = &structured.source {
-                                format!("type=volume,source={},target={}", source, structured.target)
+                                format!(
+                                    "type=volume,source={},target={}",
+                                    source, structured.target
+                                )
                             } else {
                                 format!("type=volume,target={}", structured.target)
                             }
@@ -265,25 +268,5 @@ impl ContainerRuntime for AppleRuntime {
             .collect();
 
         Ok(result)
-    }
-
-    fn tail_file(
-        &self,
-        container_handle: &dyn super::ContainerHandle,
-        file_path: &str,
-    ) -> anyhow::Result<std::process::Child> {
-        let child = Command::new("container")
-            .arg("exec")
-            .arg("-i")
-            .arg(container_handle.id())
-            .arg("tail")
-            .arg("-f")
-            .arg(file_path)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-
-        Ok(child)
     }
 }

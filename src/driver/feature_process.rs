@@ -1,29 +1,18 @@
 // MIT License
 //
 // Copyright (c) 2025 DevCon Contributors
-//
-// Permission is hereby granted, free of charge, to any person obtaining a copy
-// of this software and associated documentation files (the "Software"), to deal
-// in the Software without restriction, including without limitation the rights
-// to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-// copies of the Software, and to permit persons to whom the Software is
-// furnished to do so, subject to the following conditions:
-//
-// The above copyright notice and this permission notice shall be included in all
-// copies or substantial portions of the Software.
-//
-// THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-// IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-// FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-// AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-// LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-// OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-// SOFTWARE.
 
-//! # Container Drivers
+//! # Feature Processing
 //!
-//! This module provides the core functionality for building and managing
-//! development containers.
+//! This module provides functionality for downloading, processing, and applying
+//! devcontainer features.
+//!
+//! ## Main Components
+//!
+//! - Feature downloading from OCI registries
+//! - Feature option merging and validation
+//! - Feature installation script execution
+//! - Feature dependency resolution
 //!
 //! ## Overview
 //!
@@ -50,13 +39,11 @@ use std::{
 use anyhow::{Ok, bail};
 use dircpy::copy_dir;
 use indicatif::ProgressBar;
-use oci_spec::image::MediaType::{ImageLayer, ImageLayerGzip, ImageLayerNonDistributableGzip};
-use serde_json::Value;
 use tempfile::TempDir;
 use tracing::info;
 
 use crate::devcontainer::{
-    FeatureRef, FeatureRegistry, FeatureRegistryType,
+    FeatureRef, FeatureRegistry,
     FeatureSource::{Local, Registry},
 };
 use crate::feature::Feature;
@@ -344,7 +331,7 @@ fn download_and_cache_feature(
 
 #[cfg(test)]
 mod tests {
-    use crate::devcontainer::FeatureSource;
+    use crate::devcontainer::{FeatureRegistryType, FeatureSource};
 
     use super::*;
     use tempfile::tempdir;

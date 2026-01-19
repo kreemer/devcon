@@ -39,16 +39,16 @@ use std::{
     path::PathBuf,
 };
 
-use tracing::{debug, trace};
-
 use crate::{
     config::Config,
-    workspace::Workspace,
     driver::{
         container::ContainerDriver,
         runtime::{apple::AppleRuntime, docker::DockerRuntime},
     },
+    workspace::Workspace,
 };
+use anyhow::Result;
+use tracing::{debug, trace};
 
 /// Handles the config command to display the config file path.
 ///
@@ -63,10 +63,10 @@ use crate::{
 ///
 /// ```no_run
 /// # use devcon::command::handle_config_command;
-/// handle_config_command()?;
+/// handle_config_command(false)?;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub fn handle_config_command(create_if_missing: bool) -> anyhow::Result<()> {
+pub fn handle_config_command(create_if_missing: bool) -> Result<()> {
     let config_path = Config::get_config_path()?;
 
     trace!("Config path {}", config_path.display());
@@ -255,7 +255,6 @@ mod test {
     }
 
     #[test]
-    #[cfg(target_os = "macos")]
     fn test_handle_simple_build_command() {
         let temp_dir = tempfile::tempdir().unwrap();
         let container_content = r#"

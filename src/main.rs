@@ -38,9 +38,10 @@ mod workspace;
 #[derive(Parser, Debug)]
 #[command(
     name = "devcon",
-    about = "A TUI application for managing and launching development containers",
-    long_about = "DevCon helps you manage your development containers by keeping track of recent projects and providing a convenient interface to them with devcontainer-cli.",
-    version = "0.2.4"
+    author = "kreemer",
+    about = "A CLI tool for managing development containers",
+    long_about = None,
+    version = env!("CARGO_PKG_VERSION")
 )]
 struct Cli {
     /// Turn debugging information on
