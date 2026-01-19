@@ -72,6 +72,53 @@ use crate::{
     driver::runtime::ContainerRuntime, workspace::Workspace,
 };
 
+/// Applies a manual override to the feature installation order.
+///
+/// Reorders features according to the specified feature IDs, keeping any
+/// features not mentioned in the override list at the end in their original order.
+///
+/// # Arguments
+///
+/// * `features` - The features in their dependency-sorted order
+/// * `override_order` - List of feature IDs specifying the desired order
+///
+/// # Returns
+///
+/// Reordered vector of features
+///
+/// # Errors
+///
+/// Returns an error if a feature ID in the override list is not found
+fn apply_feature_order_override(
+    features: Vec<FeatureProcessResult>,
+    override_order: &[String],
+) -> anyhow::Result<Vec<FeatureProcessResult>> {
+    let mut ordered = Vec::new();
+    let mut remaining = features.clone();
+
+    // Process each ID in the override order
+    for feature_id in override_order {
+        if let Some(pos) = remaining.iter().position(|f| &f.feature.id == feature_id) {
+            ordered.push(remaining.remove(pos));
+        } else {
+            warn!(
+                "Feature '{}' specified in overrideFeatureInstallOrder not found",
+                feature_id
+            );
+        }
+    }
+
+    // Append any features not mentioned in the override order
+    ordered.extend(remaining);
+
+    debug!(
+        "Applied override order. Final feature order: {:?}",
+        ordered.iter().map(|f| &f.feature.id).collect::<Vec<_>>()
+    );
+
+    Ok(ordered)
+}
+
 /// Driver for managing container build and runtime operations.
 ///
 /// This struct encapsulates the logic for building container images
@@ -169,7 +216,20 @@ impl ContainerDriver {
         features.push(FeatureRef::new(FeatureSource::Local { path: agent_path }));
 
         debug!("Final feature list: {:?}", features);
-        let processed_features = process_features(&features)?;
+        let mut processed_features = process_features(&features)?;
+
+        // Apply override feature install order if specified
+        if let Some(ref override_order) = devcontainer_workspace
+            .devcontainer
+            .override_feature_install_order
+        {
+            debug!(
+                "Applying override feature install order: {:?}",
+                override_order
+            );
+            processed_features = apply_feature_order_override(processed_features, override_order)?;
+        }
+
         let mut feature_install = String::new();
 
         // Collect mounts from all features
@@ -885,5 +945,151 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::devcontainer::{FeatureRegistry, FeatureRegistryType, FeatureSource};
+    use crate::feature::Feature;
+    use std::path::PathBuf;
+
+    fn create_test_feature_result(id: &str) -> FeatureProcessResult {
+        let feature = Feature {
+            id: id.to_string(),
+            version: "1.0.0".to_string(),
+            name: Some(format!("Test {}", id)),
+            description: None,
+            documentation_url: None,
+            license_url: None,
+            keywords: None,
+            options: None,
+            installs_after: None,
+            depends_on: None,
+            deprecated: None,
+            legacy_ids: None,
+            cap_add: None,
+            security_opt: None,
+            privileged: None,
+            init: None,
+            entrypoint: None,
+            mounts: None,
+            container_env: None,
+            customizations: None,
+            on_create_command: None,
+            update_content_command: None,
+            post_create_command: None,
+            post_start_command: None,
+            post_attach_command: None,
+        };
+
+        let feature_ref = FeatureRef::new(FeatureSource::Registry {
+            registry: FeatureRegistry {
+                owner: "test".to_string(),
+                repository: "features".to_string(),
+                name: id.to_string(),
+                version: "1.0.0".to_string(),
+                registry_type: FeatureRegistryType::Ghcr,
+            },
+        });
+
+        FeatureProcessResult {
+            feature_ref,
+            feature,
+            path: PathBuf::from(format!("/tmp/{}", id)),
+        }
+    }
+
+    #[test]
+    fn test_apply_feature_order_override_complete() {
+        let features = vec![
+            create_test_feature_result("feature-a"),
+            create_test_feature_result("feature-b"),
+            create_test_feature_result("feature-c"),
+        ];
+
+        let override_order = vec![
+            "feature-c".to_string(),
+            "feature-a".to_string(),
+            "feature-b".to_string(),
+        ];
+
+        let result = apply_feature_order_override(features, &override_order);
+        assert!(result.is_ok());
+
+        let ordered = result.unwrap();
+        assert_eq!(ordered.len(), 3);
+        assert_eq!(ordered[0].feature.id, "feature-c");
+        assert_eq!(ordered[1].feature.id, "feature-a");
+        assert_eq!(ordered[2].feature.id, "feature-b");
+    }
+
+    #[test]
+    fn test_apply_feature_order_override_partial() {
+        let features = vec![
+            create_test_feature_result("feature-a"),
+            create_test_feature_result("feature-b"),
+            create_test_feature_result("feature-c"),
+            create_test_feature_result("feature-d"),
+        ];
+
+        // Only specify order for some features
+        let override_order = vec!["feature-c".to_string(), "feature-a".to_string()];
+
+        let result = apply_feature_order_override(features, &override_order);
+        assert!(result.is_ok());
+
+        let ordered = result.unwrap();
+        assert_eq!(ordered.len(), 4);
+
+        // First two should be in specified order
+        assert_eq!(ordered[0].feature.id, "feature-c");
+        assert_eq!(ordered[1].feature.id, "feature-a");
+
+        // Remaining features should be at the end (b and d)
+        let remaining_ids: Vec<&str> = ordered[2..].iter().map(|f| f.feature.id.as_str()).collect();
+        assert!(remaining_ids.contains(&"feature-b"));
+        assert!(remaining_ids.contains(&"feature-d"));
+    }
+
+    #[test]
+    fn test_apply_feature_order_override_empty() {
+        let features = vec![
+            create_test_feature_result("feature-a"),
+            create_test_feature_result("feature-b"),
+        ];
+
+        let override_order: Vec<String> = vec![];
+
+        let result = apply_feature_order_override(features, &override_order);
+        assert!(result.is_ok());
+
+        let ordered = result.unwrap();
+        assert_eq!(ordered.len(), 2);
+        // Original order should be preserved
+        assert_eq!(ordered[0].feature.id, "feature-a");
+        assert_eq!(ordered[1].feature.id, "feature-b");
+    }
+
+    #[test]
+    fn test_apply_feature_order_override_nonexistent() {
+        let features = vec![
+            create_test_feature_result("feature-a"),
+            create_test_feature_result("feature-b"),
+        ];
+
+        let override_order = vec!["feature-nonexistent".to_string(), "feature-a".to_string()];
+
+        let result = apply_feature_order_override(features, &override_order);
+        assert!(result.is_ok());
+
+        let ordered = result.unwrap();
+        assert_eq!(ordered.len(), 2);
+
+        // feature-a should be first (as it was in override list)
+        assert_eq!(ordered[0].feature.id, "feature-a");
+        // feature-b should be second (not in override list)
+        assert_eq!(ordered[1].feature.id, "feature-b");
     }
 }

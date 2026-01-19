@@ -32,6 +32,7 @@
 //! - **Local** - Loaded from the local filesystem (not yet implemented)
 
 use std::{
+    collections::{HashMap, HashSet, VecDeque},
     fs::{self, File},
     path::PathBuf,
 };
@@ -40,14 +41,16 @@ use anyhow::{Ok, bail};
 use dircpy::copy_dir;
 use indicatif::ProgressBar;
 use tempfile::TempDir;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::devcontainer::{
     FeatureRef, FeatureRegistry,
     FeatureSource::{Local, Registry},
+    parse_feature,
 };
 use crate::feature::Feature;
 
+#[derive(Debug, Clone)]
 pub struct FeatureProcessResult {
     pub feature_ref: FeatureRef,
     pub feature: Feature,
@@ -57,29 +60,28 @@ pub struct FeatureProcessResult {
 /// Processes a list of features, downloading and extracting them as needed.
 ///
 /// This function iterates through all features and processes each one,
-/// returning a list of tuples containing the feature reference and its
-/// relative path in the temporary directory.
+/// resolving transitive dependencies and ordering them topologically.
 ///
 /// # Arguments
 ///
 /// * `features` - Slice of features to process
-/// * `directory` - Temporary directory where features will be stored
 ///
 /// # Returns
 ///
-/// A vector of tuples containing:
-/// - Reference to the feature
-/// - Relative path to the extracted feature files
+/// A vector of FeatureProcessResult in dependency order (dependencies first)
 ///
 /// # Errors
 ///
-/// Returns an error if any feature fails to download or extract.
+/// Returns an error if any feature fails to download, extract, or if there are
+/// circular dependencies.
 pub fn process_features<'a>(
     features: &'a [FeatureRef],
 ) -> anyhow::Result<Vec<FeatureProcessResult>> {
     println!("Processing features..");
     let bar = ProgressBar::new(u64::try_from(features.len())?);
-    let mut result: Vec<FeatureProcessResult> = vec![];
+    let mut initial_results: Vec<FeatureProcessResult> = vec![];
+
+    // Process initial features
     for feature_ref in features {
         match &feature_ref.source {
             Registry { registry, .. } => {
@@ -95,11 +97,243 @@ pub fn process_features<'a>(
             )),
         }
         let feature_result = process_feature(feature_ref)?;
-        result.push(feature_result);
+        initial_results.push(feature_result);
         bar.inc(1);
     }
     bar.finish();
-    Ok(result)
+
+    // Resolve all dependencies (transitive)
+    println!("Resolving feature dependencies..");
+    let all_features = resolve_all_dependencies(initial_results)?;
+
+    // Sort features topologically
+    println!("Ordering features by dependencies..");
+    let sorted_features = topological_sort(all_features)?;
+
+    println!(
+        "Processed {} features (including dependencies)",
+        sorted_features.len()
+    );
+
+    Ok(sorted_features)
+}
+
+/// Recursively resolves and downloads all feature dependencies.
+///
+/// This function processes the initial features and their transitive dependencies,
+/// downloading any features referenced in `dependsOn` or `installsAfter` fields.
+///
+/// # Arguments
+///
+/// * `initial_features` - The initial set of features to process
+///
+/// # Returns
+///
+/// A map from feature ID to its processed result, including all transitive dependencies
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - A dependency cannot be downloaded or processed
+/// - A circular dependency is detected
+/// - A dependency reference cannot be parsed
+fn resolve_all_dependencies(
+    initial_features: Vec<FeatureProcessResult>,
+) -> anyhow::Result<HashMap<String, FeatureProcessResult>> {
+    let mut all_features: HashMap<String, FeatureProcessResult> = HashMap::new();
+    let mut to_process: VecDeque<FeatureProcessResult> = VecDeque::new();
+    let mut processing: HashSet<String> = HashSet::new();
+
+    // Add initial features to processing queue
+    for feature_result in initial_features {
+        let feature_id = feature_result.feature.id.clone();
+        to_process.push_back(feature_result);
+        processing.insert(feature_id);
+    }
+
+    while let Some(current) = to_process.pop_front() {
+        let current_id = current.feature.id.clone();
+        debug!("Processing dependencies for feature: {}", current_id);
+
+        // Collect all dependencies (both dependsOn and installsAfter)
+        let mut dependencies: Vec<String> = Vec::new();
+
+        if let Some(ref depends_on) = current.feature.depends_on {
+            dependencies.extend(depends_on.keys().cloned());
+        }
+
+        if let Some(ref installs_after) = current.feature.installs_after {
+            dependencies.extend(installs_after.iter().cloned());
+        }
+
+        // Process each dependency
+        for dep_id in dependencies {
+            // Skip if already processed or in processing queue
+            if all_features.contains_key(&dep_id) || processing.contains(&dep_id) {
+                continue;
+            }
+
+            debug!(
+                "Downloading dependency: {} for feature: {}",
+                dep_id, current_id
+            );
+
+            // Parse the dependency ID and download the feature
+            // Dependencies can be:
+            // 1. Just feature ID (e.g., "ghcr.io/devcontainers/features/common-utils")
+            // 2. Feature ID with version from dependsOn map
+            let dep_ref = if let Some(ref depends_on) = current.feature.depends_on {
+                if let Some(version_value) = depends_on.get(&dep_id) {
+                    // Parse version from the value (could be string or object with version)
+                    let version = match version_value {
+                        serde_json::Value::String(v) => v.clone(),
+                        serde_json::Value::Object(obj) => obj
+                            .get("version")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("latest")
+                            .to_string(),
+                        _ => "latest".to_string(),
+                    };
+
+                    // Create FeatureRef from dependency ID
+                    // Format the ID with version: "ghcr.io/owner/repo/feature:version"
+                    let feature_url = if dep_id.contains(':') {
+                        dep_id.clone()
+                    } else {
+                        format!("{}:{}", dep_id, version)
+                    };
+                    parse_feature::<serde_json::Error>(&feature_url, serde_json::json!({}))?
+                } else {
+                    // Use from installsAfter, default to latest
+                    let feature_url = if dep_id.contains(':') {
+                        dep_id.clone()
+                    } else {
+                        format!("{}:latest", dep_id)
+                    };
+                    parse_feature::<serde_json::Error>(&feature_url, serde_json::json!({}))?
+                }
+            } else {
+                let feature_url = if dep_id.contains(':') {
+                    dep_id.clone()
+                } else {
+                    format!("{}:latest", dep_id)
+                };
+                parse_feature::<serde_json::Error>(&feature_url, serde_json::json!({}))?
+            };
+
+            // Process the dependency
+            let dep_result = process_feature(&dep_ref)?;
+            let dep_feature_id = dep_result.feature.id.clone();
+
+            // Add to processing queue
+            processing.insert(dep_feature_id.clone());
+            to_process.push_back(dep_result);
+        }
+
+        // Add current feature to results
+        all_features.insert(current_id.clone(), current);
+        processing.remove(&current_id);
+    }
+
+    Ok(all_features)
+}
+
+/// Performs topological sort on features based on their dependencies.
+/// Performs topological sort on features based on their dependencies.
+///
+/// Uses Kahn's algorithm to order features such that dependencies are installed
+/// before features that depend on them.
+///
+/// # Arguments
+///
+/// * `features` - Map of feature ID to FeatureProcessResult
+///
+/// # Returns
+///
+/// An ordered vector of FeatureProcessResult where dependencies come before dependents
+///
+/// # Errors
+///
+/// Returns an error if a circular dependency is detected
+fn topological_sort(
+    features: HashMap<String, FeatureProcessResult>,
+) -> anyhow::Result<Vec<FeatureProcessResult>> {
+    let mut in_degree: HashMap<String, usize> = HashMap::new();
+    let mut adjacency: HashMap<String, Vec<String>> = HashMap::new();
+    let mut feature_map = features;
+
+    // Build the dependency graph
+    for (feature_id, feature_result) in &feature_map {
+        in_degree.entry(feature_id.clone()).or_insert(0);
+        adjacency.entry(feature_id.clone()).or_insert_with(Vec::new);
+
+        let mut dependencies = Vec::new();
+
+        // Add dependsOn dependencies
+        if let Some(ref depends_on) = feature_result.feature.depends_on {
+            dependencies.extend(depends_on.keys().cloned());
+        }
+
+        // Add installsAfter dependencies
+        if let Some(ref installs_after) = feature_result.feature.installs_after {
+            dependencies.extend(installs_after.iter().cloned());
+        }
+
+        for dep_id in dependencies {
+            // Only process dependencies that are in our feature set
+            if feature_map.contains_key(&dep_id) {
+                adjacency
+                    .entry(dep_id.clone())
+                    .or_insert_with(Vec::new)
+                    .push(feature_id.clone());
+                *in_degree.entry(feature_id.clone()).or_insert(0) += 1;
+            }
+        }
+    }
+
+    // Kahn's algorithm: start with nodes that have no dependencies
+    let mut queue: VecDeque<String> = in_degree
+        .iter()
+        .filter(|(_, degree)| **degree == 0)
+        .map(|(id, _)| id.clone())
+        .collect();
+
+    let mut sorted: Vec<FeatureProcessResult> = Vec::new();
+
+    while let Some(current_id) = queue.pop_front() {
+        // Move the feature from the map to the sorted list
+        if let Some(feature_result) = feature_map.remove(&current_id) {
+            sorted.push(feature_result);
+        }
+
+        // Reduce in-degree for all dependent features
+        if let Some(dependents) = adjacency.get(&current_id) {
+            for dependent_id in dependents {
+                if let Some(degree) = in_degree.get_mut(dependent_id) {
+                    *degree -= 1;
+                    if *degree == 0 {
+                        queue.push_back(dependent_id.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    // Check for circular dependencies
+    if sorted.len() != in_degree.len() {
+        let remaining: Vec<String> = feature_map.keys().cloned().collect();
+        bail!(
+            "Circular dependency detected among features: {:?}",
+            remaining
+        );
+    }
+
+    debug!("Topologically sorted {} features", sorted.len());
+    for (i, feature) in sorted.iter().enumerate() {
+        debug!("  {}. {}", i + 1, feature.feature.id);
+    }
+
+    Ok(sorted)
 }
 
 fn process_feature<'a>(feature_ref: &'a FeatureRef) -> anyhow::Result<FeatureProcessResult> {
@@ -399,5 +633,196 @@ mod tests {
             "Failed to download feature: {:?}",
             result.err()
         );
+    }
+
+    #[test]
+    fn test_topological_sort_simple() {
+        // Create mock features with dependencies
+        let mut features = HashMap::new();
+
+        // Feature A (no dependencies)
+        let feature_a = create_mock_feature("feature-a", None, None);
+        features.insert("feature-a".to_string(), feature_a);
+
+        // Feature B depends on A
+        let mut depends_on_b = HashMap::new();
+        depends_on_b.insert("feature-a".to_string(), serde_json::json!("1.0.0"));
+        let feature_b = create_mock_feature("feature-b", Some(depends_on_b), None);
+        features.insert("feature-b".to_string(), feature_b);
+
+        // Feature C depends on B
+        let mut depends_on_c = HashMap::new();
+        depends_on_c.insert("feature-b".to_string(), serde_json::json!("1.0.0"));
+        let feature_c = create_mock_feature("feature-c", Some(depends_on_c), None);
+        features.insert("feature-c".to_string(), feature_c);
+
+        let result = topological_sort(features);
+        assert!(
+            result.is_ok(),
+            "Topological sort failed: {:?}",
+            result.err()
+        );
+
+        let sorted = result.unwrap();
+        assert_eq!(sorted.len(), 3);
+
+        // Verify order: A should come before B, B should come before C
+        let ids: Vec<String> = sorted.iter().map(|f| f.feature.id.clone()).collect();
+        let pos_a = ids.iter().position(|id| id == "feature-a").unwrap();
+        let pos_b = ids.iter().position(|id| id == "feature-b").unwrap();
+        let pos_c = ids.iter().position(|id| id == "feature-c").unwrap();
+
+        assert!(pos_a < pos_b, "Feature A should come before B");
+        assert!(pos_b < pos_c, "Feature B should come before C");
+    }
+
+    #[test]
+    fn test_topological_sort_installs_after() {
+        let mut features = HashMap::new();
+
+        // Feature A
+        let feature_a = create_mock_feature("feature-a", None, None);
+        features.insert("feature-a".to_string(), feature_a);
+
+        // Feature B installs after A
+        let installs_after_b = vec!["feature-a".to_string()];
+        let feature_b = create_mock_feature("feature-b", None, Some(installs_after_b));
+        features.insert("feature-b".to_string(), feature_b);
+
+        let result = topological_sort(features);
+        assert!(result.is_ok());
+
+        let sorted = result.unwrap();
+        let ids: Vec<String> = sorted.iter().map(|f| f.feature.id.clone()).collect();
+        let pos_a = ids.iter().position(|id| id == "feature-a").unwrap();
+        let pos_b = ids.iter().position(|id| id == "feature-b").unwrap();
+
+        assert!(pos_a < pos_b, "Feature A should come before B");
+    }
+
+    #[test]
+    fn test_topological_sort_circular_dependency() {
+        let mut features = HashMap::new();
+
+        // Feature A depends on B
+        let mut depends_on_a = HashMap::new();
+        depends_on_a.insert("feature-b".to_string(), serde_json::json!("1.0.0"));
+        let feature_a = create_mock_feature("feature-a", Some(depends_on_a), None);
+        features.insert("feature-a".to_string(), feature_a);
+
+        // Feature B depends on A (circular!)
+        let mut depends_on_b = HashMap::new();
+        depends_on_b.insert("feature-a".to_string(), serde_json::json!("1.0.0"));
+        let feature_b = create_mock_feature("feature-b", Some(depends_on_b), None);
+        features.insert("feature-b".to_string(), feature_b);
+
+        let result = topological_sort(features);
+        assert!(result.is_err(), "Should detect circular dependency");
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Circular dependency"),
+            "Error should mention circular dependency"
+        );
+    }
+
+    #[test]
+    fn test_topological_sort_diamond_dependency() {
+        // Diamond pattern: D depends on B and C, both B and C depend on A
+        let mut features = HashMap::new();
+
+        // Feature A (base)
+        let feature_a = create_mock_feature("feature-a", None, None);
+        features.insert("feature-a".to_string(), feature_a);
+
+        // Feature B depends on A
+        let mut depends_on_b = HashMap::new();
+        depends_on_b.insert("feature-a".to_string(), serde_json::json!("1.0.0"));
+        let feature_b = create_mock_feature("feature-b", Some(depends_on_b), None);
+        features.insert("feature-b".to_string(), feature_b);
+
+        // Feature C depends on A
+        let mut depends_on_c = HashMap::new();
+        depends_on_c.insert("feature-a".to_string(), serde_json::json!("1.0.0"));
+        let feature_c = create_mock_feature("feature-c", Some(depends_on_c), None);
+        features.insert("feature-c".to_string(), feature_c);
+
+        // Feature D depends on B and C
+        let mut depends_on_d = HashMap::new();
+        depends_on_d.insert("feature-b".to_string(), serde_json::json!("1.0.0"));
+        depends_on_d.insert("feature-c".to_string(), serde_json::json!("1.0.0"));
+        let feature_d = create_mock_feature("feature-d", Some(depends_on_d), None);
+        features.insert("feature-d".to_string(), feature_d);
+
+        let result = topological_sort(features);
+        assert!(result.is_ok());
+
+        let sorted = result.unwrap();
+        let ids: Vec<String> = sorted.iter().map(|f| f.feature.id.clone()).collect();
+
+        let pos_a = ids.iter().position(|id| id == "feature-a").unwrap();
+        let pos_b = ids.iter().position(|id| id == "feature-b").unwrap();
+        let pos_c = ids.iter().position(|id| id == "feature-c").unwrap();
+        let pos_d = ids.iter().position(|id| id == "feature-d").unwrap();
+
+        // A must come before both B and C
+        assert!(pos_a < pos_b, "A should come before B");
+        assert!(pos_a < pos_c, "A should come before C");
+        // Both B and C must come before D
+        assert!(pos_b < pos_d, "B should come before D");
+        assert!(pos_c < pos_d, "C should come before D");
+    }
+
+    // Helper function to create mock feature results
+    fn create_mock_feature(
+        id: &str,
+        depends_on: Option<HashMap<String, serde_json::Value>>,
+        installs_after: Option<Vec<String>>,
+    ) -> FeatureProcessResult {
+        use std::path::PathBuf;
+
+        let feature = crate::feature::Feature {
+            id: id.to_string(),
+            version: "1.0.0".to_string(),
+            name: Some(format!("Mock {}", id)),
+            description: None,
+            documentation_url: None,
+            license_url: None,
+            keywords: None,
+            options: None,
+            installs_after,
+            depends_on,
+            deprecated: None,
+            legacy_ids: None,
+            cap_add: None,
+            security_opt: None,
+            privileged: None,
+            init: None,
+            entrypoint: None,
+            mounts: None,
+            container_env: None,
+            customizations: None,
+            on_create_command: None,
+            update_content_command: None,
+            post_create_command: None,
+            post_start_command: None,
+            post_attach_command: None,
+        };
+
+        let feature_ref = FeatureRef::new(FeatureSource::Registry {
+            registry: FeatureRegistry {
+                owner: "test".to_string(),
+                repository: "features".to_string(),
+                name: id.to_string(),
+                version: "1.0.0".to_string(),
+                registry_type: FeatureRegistryType::Ghcr,
+            },
+        });
+
+        FeatureProcessResult {
+            feature_ref,
+            feature,
+            path: PathBuf::from(format!("/tmp/{}", id)),
+        }
     }
 }
