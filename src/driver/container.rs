@@ -55,7 +55,8 @@
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::PathBuf;
-use std::thread;
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use anyhow::{Context, bail};
 use devcon_proto::{AgentMessage, agent_message};
@@ -452,18 +453,26 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             .to_string())
     }
 
-    /// Starts a container instance with the project directory mounted.
+    /// Starts a container from a built image.
     ///
-    /// This method starts a container in detached mode with:
-    /// - The project directory mounted at `/workspaces/{project_name}`
-    /// - Environment variables from the config
-    /// - Automatic removal on exit (`--rm` flag)
-    /// - Detached mode (`-d` flag)
+    /// This method:
+    /// 1. Starts the container with the project directory mounted
+    /// 2. Executes lifecycle commands in order:
+    ///    - `onCreateCommand`
+    ///    - Dotfiles setup (if configured)
+    ///    - `postCreateCommand`
+    ///    - `postStartCommand`
+    /// 3. Starts the agent listener in a background thread
+    ///
+    /// # Returns
+    ///
+    /// Returns a `JoinHandle` for the agent listener thread. The caller should
+    /// wait on this handle to keep the process alive and maintain the listener.
     ///
     /// # Arguments
     ///
-    /// * `path` - The path to the project directory to mount
-    /// * `env_variables` - Environment variables to pass to the container
+    /// * `path` - The path to the project directory to mount as a volume
+    /// * `env_variables` - Additional environment variables to pass to the container
     ///
     /// # Errors
     ///
@@ -482,7 +491,9 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
     /// let config = Devcontainer::try_from(PathBuf::from("/project"))?;
     /// let driver = ContainerDriver::new(&config);
     /// driver.build(None, &[])?;
-    /// driver.start(PathBuf::from("/project"), &["EDITOR=vim".to_string()])?;
+    /// let handle = driver.start(PathBuf::from("/project"), &["EDITOR=vim".to_string()])?;
+    /// // Wait for the listener (keeps process alive)
+    /// let _ = handle.join();
     /// # Ok(())
     /// # }
     /// ```
@@ -490,14 +501,15 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         &self,
         devcontainer_workspace: Workspace,
         env_variables: &[String],
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<JoinHandle<()>> {
         let handles = self.runtime.list()?;
         let handle = handles
             .iter()
             .find(|(name, _)| name == &self.get_container_name(&devcontainer_workspace));
 
         if handle.is_some() {
-            return Ok(());
+            info!("Container already running, starting listener for existing container");
+            return self.start_agent_listener(&devcontainer_workspace);
         }
 
         let images = self.runtime.images()?;
@@ -570,15 +582,27 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             }
         }
 
+        // Add bind mount for message queue
+        let host_message_dir = std::env::temp_dir().join(format!(
+            "devcon-messages-{}",
+            devcontainer_workspace.get_sanitized_name()
+        ));
+        fs::create_dir_all(&host_message_dir)?;
+
+        all_mounts.push(crate::devcontainer::Mount::Structured(
+            crate::devcontainer::StructuredMount {
+                mount_type: crate::devcontainer::MountType::Bind,
+                source: Some(host_message_dir.to_string_lossy().to_string()),
+                target: "/var/run/devcon/messages".to_string(),
+            },
+        ));
+
         // Process environment variables
         let mut processed_env_vars = Vec::new();
 
-        // Add DEVCON_SOCKET environment variable
-        let socket_path = format!(
-            "/tmp/devcon-sockets/devcon-{}.sock",
-            devcontainer_workspace.get_sanitized_name()
-        );
-        processed_env_vars.push(format!("DEVCON_SOCKET={}", socket_path));
+        // Add DEVCON_MESSAGE_DIR environment variable
+        let message_dir = "/var/run/devcon/messages";
+        processed_env_vars.push(format!("DEVCON_MESSAGE_DIR={}", message_dir));
 
         for env_var in env_variables {
             if env_var.contains("=") {
@@ -678,10 +702,10 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             None => { /* No onCreateCommand specified */ }
         };
 
-        // Start listener for agent messages
-        self.start_agent_listener(handle)?;
+        // Start listener for agent messages and return the handle
+        let listener_handle = self.start_agent_listener(&devcontainer_workspace)?;
 
-        Ok(())
+        Ok(listener_handle)
     }
 
     /// Shells into a started container.
@@ -858,113 +882,129 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         cmd.to_string()
     }
 
-    /// Starts a background listener that reads and processes agent messages from Unix socket
+    /// Starts a background listener for agent messages using file-based IPC
+    ///
+    /// This implementation uses a file-based message queue that works across
+    /// Docker Desktop's virtualization boundary on both Mac and Linux.
+    ///
+    /// Messages are written by the agent to: /var/run/devcon/messages/
+    /// The host monitors this directory via a bind mount at: /tmp/devcon-messages-{id}/
+    ///
+    /// Returns a JoinHandle that can be used to wait for the listener thread.
     fn start_agent_listener(
         &self,
-        container_handle: Box<dyn crate::driver::runtime::ContainerHandle>,
-    ) -> anyhow::Result<()> {
-        info!("Starting agent message listener on Unix socket...");
+        devcontainer_workspace: &Workspace,
+    ) -> anyhow::Result<JoinHandle<()>> {
+        info!("Starting agent message listener using file-based IPC...");
 
-        use std::os::unix::net::UnixListener;
+        // Create message queue directory on host
+        let message_dir = std::env::temp_dir().join(format!(
+            "devcon-messages-{}",
+            devcontainer_workspace.get_sanitized_name()
+        ));
 
-        // Create socket path in host's /tmp/devcon-sockets directory
-        let socket_path = format!("/tmp/devcon-sockets/devcon-{}.sock", container_handle.id());
+        fs::create_dir_all(&message_dir).context("Failed to create message queue directory")?;
 
-        // Create directory if it doesn't exist
-        std::fs::create_dir_all("/tmp/devcon-sockets")?;
+        info!(
+            "Agent message queue at: {} (mounted to container at /var/run/devcon/messages/)",
+            message_dir.display()
+        );
 
-        // Remove existing socket if present
-        let _ = std::fs::remove_file(&socket_path);
-
-        let listener = UnixListener::bind(&socket_path)
-            .context(format!("Failed to bind Unix socket at {}", socket_path))?;
-
-        info!("Agent listener socket bound at {}", socket_path);
-
+        // Spawn listener thread
         let handle = thread::spawn(move || {
-            debug!("Agent listener thread started, waiting for connections...");
+            info!("Agent listener thread started, monitoring for messages...");
+            let mut processed_messages = std::collections::HashSet::new();
 
-            // Accept connections and process messages
-            for stream in listener.incoming() {
-                match stream {
-                    Ok(mut stream) => {
-                        debug!("Agent connected to socket");
+            loop {
+                // Scan for new message files
+                if let Ok(entries) = fs::read_dir(&message_dir) {
+                    for entry in entries.flatten() {
+                        let path = entry.path();
 
-                        // Read length-prefixed messages
-                        let mut len_buf = [0u8; 4];
-                        loop {
-                            // Read message length
-                            if let Err(e) = stream.read_exact(&mut len_buf) {
-                                if e.kind() == std::io::ErrorKind::UnexpectedEof {
-                                    debug!("Agent connection closed");
-                                    break;
-                                }
-                                warn!("Error reading message length: {}", e);
-                                break;
+                        // Only process .msg files that haven't been processed
+                        if path.extension().and_then(|s| s.to_str()) == Some("msg") {
+                            let file_name = path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("")
+                                .to_string();
+
+                            if processed_messages.contains(&file_name) {
+                                continue;
                             }
 
-                            let len = u32::from_be_bytes(len_buf) as usize;
-                            if len == 0 || len > 1024 * 1024 {
-                                warn!("Invalid message length: {}", len);
-                                break;
-                            }
-
-                            // Read message data
-                            let mut msg_buf = vec![0u8; len];
-                            if let Err(e) = stream.read_exact(&mut msg_buf) {
-                                warn!("Error reading message data: {}", e);
-                                break;
-                            }
-
-                            // Decode protobuf message
-                            match AgentMessage::decode(&msg_buf[..]) {
+                            // Read and process the message
+                            match Self::read_message_file(&path) {
                                 Ok(msg) => {
-                                    debug!("Received agent message: {:?}", msg);
-                                    if let Some(message) = msg.message {
-                                        match message {
-                                            agent_message::Message::StartPortForward(req) => {
-                                                info!(
-                                                    "🔍 Agent discovered port {} listening in container",
-                                                    req.port
-                                                );
-                                                // TODO: Implement actual port forwarding logic here
-                                                info!(
-                                                    "💡 Add port {} to 'forwardPorts' in devcontainer.json to auto-forward",
-                                                    req.port
-                                                );
-                                            }
-                                            agent_message::Message::StopPortForward(req) => {
-                                                debug!("Port {} closed in container", req.port);
-                                            }
-                                            agent_message::Message::OpenUrl(req) => {
-                                                debug!("Received OpenUrl request: {}", req.url);
-                                            }
-                                        }
-                                    }
+                                    Self::process_agent_message(&msg);
+                                    processed_messages.insert(file_name.clone());
+
+                                    // Delete the processed message file
+                                    let _ = fs::remove_file(&path);
                                 }
                                 Err(e) => {
-                                    warn!("Failed to decode agent message: {}", e);
+                                    warn!("Failed to read message file {}: {}", path.display(), e);
+                                    // Mark as processed to avoid repeated errors
+                                    processed_messages.insert(file_name);
                                 }
                             }
                         }
                     }
-                    Err(e) => {
-                        warn!("Failed to accept connection: {}", e);
+                }
+
+                // Sleep before next poll
+                thread::sleep(Duration::from_millis(100));
+            }
+        });
+
+        Ok(handle)
+    }
+
+    /// Reads a protobuf message from a file
+    fn read_message_file(path: &PathBuf) -> anyhow::Result<AgentMessage> {
+        let mut file = File::open(path).context("Failed to open message file")?;
+
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)
+            .context("Failed to read message file")?;
+
+        AgentMessage::decode(&buffer[..])
+            .map_err(|e| anyhow::anyhow!("Failed to decode protobuf message: {}", e))
+    }
+
+    /// Processes an agent message and takes appropriate action
+    fn process_agent_message(msg: &AgentMessage) {
+        if let Some(ref message) = msg.message {
+            match message {
+                agent_message::Message::StartPortForward(req) => {
+                    info!(
+                        "🔍 Agent discovered port {} listening in container",
+                        req.port
+                    );
+                    info!(
+                        "💡 Add port {} to 'forwardPorts' in devcontainer.json to auto-forward",
+                        req.port
+                    );
+                }
+                agent_message::Message::StopPortForward(req) => {
+                    debug!("Agent stopped forwarding port {}", req.port);
+                }
+                agent_message::Message::OpenUrl(req) => {
+                    info!("🌐 Agent requested to open URL: {}", req.url);
+
+                    // Try to open the URL on the host
+                    #[cfg(target_os = "macos")]
+                    {
+                        let _ = std::process::Command::new("open").arg(&req.url).spawn();
+                    }
+
+                    #[cfg(target_os = "linux")]
+                    {
+                        let _ = std::process::Command::new("xdg-open").arg(&req.url).spawn();
                     }
                 }
             }
-
-            debug!("Agent listener thread exiting");
-        });
-
-        let result = handle.join();
-
-        match result {
-            Ok(_) => debug!("Agent listener thread joined successfully"),
-            Err(e) => warn!("Agent listener thread panicked: {:?}", e),
         }
-
-        Ok(())
     }
 }
 

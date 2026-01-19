@@ -30,6 +30,7 @@ use std::{
 };
 
 use anyhow::bail;
+use tracing::trace;
 
 use super::{ContainerRuntime, stream_build_output};
 
@@ -88,6 +89,7 @@ impl ContainerRuntime for DockerRuntime {
         env_vars: &[String],
         additional_mounts: &[crate::devcontainer::Mount],
     ) -> anyhow::Result<Box<dyn super::ContainerHandle>> {
+        trace!("Running Docker container with image: {}", image_tag);
         let mut cmd = Command::new("docker");
         cmd.arg("run")
             .arg("--rm")
@@ -135,6 +137,8 @@ impl ContainerRuntime for DockerRuntime {
 
         cmd.arg(image_tag);
 
+        trace!("Executing Docker command: {:?}", cmd);
+
         let result = cmd.output()?;
 
         if result.status.code() != Some(0) {
@@ -142,7 +146,7 @@ impl ContainerRuntime for DockerRuntime {
         }
 
         Ok(Box::new(DockerContainerHandle {
-            id: String::from_utf8_lossy(&result.stdout).to_string(),
+            id: String::from_utf8_lossy(&result.stdout).trim().to_string(),
         }))
     }
 
@@ -203,7 +207,11 @@ impl ContainerRuntime for DockerRuntime {
                 }
             }
 
-            let id = container["ID"].as_str().unwrap_or_default().to_string();
+            let id = container["ID"]
+                .as_str()
+                .unwrap_or_default()
+                .trim()
+                .to_string();
 
             if !container_name.is_empty() {
                 let handle = DockerContainerHandle { id: id.clone() };
