@@ -44,6 +44,10 @@ cargo b --release --workspace --bin devcon-agent
 mv target/release/devcon-agent /usr/local/bin/devcon-agent
 rm -rf /tmp/devcon
 
+echo '#!/bin/bash' > /usr/local/bin/devcon-browser
+echo 'devcon-agent open-url $1' >> /usr/local/bin/devcon-browser
+chmod +x /usr/local/bin/devcon-browser
+
 echo "DevCon Agent installed successfully."
 "###,
             )
@@ -104,6 +108,10 @@ impl Agent {
             "dependsOn": {
                 "ghcr.io/devcontainers/features/rust": {},
                 "ghcr.io/devcontainers-extra/features/protoc": {}
+            },
+            "containerEnv": {
+                "DEVCON_AGENT": "1",
+                "BROWSER": "/usr/local/bin/devcon-browser"
             }
         });
 
