@@ -91,6 +91,89 @@ fn connect_to_control_server(host: &str, port: u16) -> io::Result<TcpStream> {
     TcpStream::connect(addr)
 }
 
+/// Handle port forwarding requests - connect to local service and proxy data
+fn handle_tunnel_request(stream: &mut TcpStream, port: u16) -> io::Result<()> {
+    eprintln!(
+        "Tunnel request received for port {}, connecting to localhost:{} in container",
+        port, port
+    );
+
+    // Connect to the local service in the container
+    let local_addr = format!("127.0.0.1:{}", port);
+    let local_stream = match TcpStream::connect(&local_addr) {
+        Ok(s) => {
+            eprintln!("Connected to local service at {}", local_addr);
+            s
+        }
+        Err(e) => {
+            eprintln!(
+                "Failed to connect to local service at {}: {}",
+                local_addr, e
+            );
+            return Err(e);
+        }
+    };
+
+    // Clone streams for bidirectional proxying
+    let mut stream_read = stream.try_clone()?;
+    let mut stream_write = stream.try_clone()?;
+    let mut local_read = local_stream.try_clone()?;
+    let mut local_write = local_stream.try_clone()?;
+
+    // Spawn thread to copy from control connection to local service
+    let handle = std::thread::spawn(move || {
+        let result = std::io::copy(&mut stream_read, &mut local_write);
+        let _ = local_write.shutdown(std::net::Shutdown::Write);
+        result
+    });
+
+    // Copy from local service to control connection in this thread
+    let result = std::io::copy(&mut local_read, &mut stream_write);
+    let _ = stream_write.shutdown(std::net::Shutdown::Write);
+
+    // Wait for the other direction to complete
+    let _ = handle.join();
+
+    eprintln!("Tunnel closed for port {}", port);
+    result.map(|_| ())
+}
+
+/// Run port forward daemon for a specific port
+fn run_port_forward_daemon(stream: &mut TcpStream, port: u16) -> io::Result<()> {
+    eprintln!("Port forward daemon running for port {}", port);
+
+    // Keep the connection alive and handle tunnel requests
+    loop {
+        match read_message(stream) {
+            Ok(message) => {
+                match message.message {
+                    Some(agent_message::Message::StartPortForward(fwd)) => {
+                        eprintln!("Received tunnel request for port {}", fwd.port);
+                        if let Err(e) = handle_tunnel_request(stream, fwd.port as u16) {
+                            eprintln!("Error handling tunnel: {}", e);
+                            // Connection likely broken, exit
+                            break;
+                        }
+                    }
+                    _ => {
+                        eprintln!("Received unexpected message: {:?}", message);
+                    }
+                }
+            }
+            Err(e) => {
+                if e.kind() == io::ErrorKind::UnexpectedEof {
+                    eprintln!("Control server connection closed");
+                    break;
+                }
+                eprintln!("Error reading from control server: {}", e);
+                break;
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Run the agent as a daemon, maintaining connection to control server
 fn run_daemon(host: &str, port: u16) -> io::Result<()> {
     let mut stream = connect_to_control_server(host, port)?;
@@ -102,7 +185,17 @@ fn run_daemon(host: &str, port: u16) -> io::Result<()> {
             Ok(message) => {
                 eprintln!("Received message from host: {:?}", message);
                 // Handle incoming messages from host (e.g., port forward requests)
-                // For now, just acknowledge receipt
+                match message.message {
+                    Some(agent_message::Message::StartPortForward(fwd)) => {
+                        eprintln!("Received tunnel request for port {}", fwd.port);
+                        if let Err(e) = handle_tunnel_request(&mut stream, fwd.port as u16) {
+                            eprintln!("Error handling tunnel: {}", e);
+                        }
+                    }
+                    _ => {
+                        eprintln!("Received message: {:?}", message);
+                    }
+                }
             }
             Err(e) => {
                 if e.kind() == io::ErrorKind::UnexpectedEof {
@@ -125,12 +218,20 @@ fn main() {
         Commands::StartPortForward { port } => {
             match connect_to_control_server(&cli.control_host, cli.control_port) {
                 Ok(mut stream) => {
+                    eprintln!("Requesting port forward for port {}", port);
                     let msg = AgentMessage {
                         message: Some(agent_message::Message::StartPortForward(StartPortForward {
                             port: port as u32,
                         })),
                     };
-                    send_message(&mut stream, &msg)
+                    match send_message(&mut stream, &msg) {
+                        Ok(_) => {
+                            eprintln!("Port forward request sent, keeping connection alive...");
+                            // Keep connection alive and handle any reverse tunnel requests
+                            run_port_forward_daemon(&mut stream, port)
+                        }
+                        Err(e) => Err(e),
+                    }
                 }
                 Err(e) => Err(e),
             }

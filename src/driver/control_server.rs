@@ -64,11 +64,11 @@ impl PortForwardManager {
         }
 
         // Start the local listener for this port
-        let listener = TcpListener::bind(format!("127.0.0.1:{}", local_port))
+        let listener = TcpListener::bind(format!("0.0.0.0:{}", local_port))
             .context(format!("Failed to bind to port {}", local_port))?;
 
         info!(
-            "Listening on 127.0.0.1:{} for connections to forward to container port {}",
+            "Listening on 0.0.0.0:{} for connections to forward to container port {}",
             local_port, container_port
         );
 
@@ -81,11 +81,11 @@ impl PortForwardManager {
         thread::spawn(move || {
             for incoming_stream in listener.incoming() {
                 match incoming_stream {
-                    Ok(mut client_stream) => {
+                    Ok(client_stream) => {
                         let agent_stream = stream_clone.clone();
                         thread::spawn(move || {
                             if let Err(e) = handle_forwarded_connection(
-                                &mut client_stream,
+                                client_stream,
                                 agent_stream,
                                 container_port,
                             ) {
@@ -123,7 +123,7 @@ impl PortForwardManager {
 
 /// Handle a forwarded connection from host to container
 fn handle_forwarded_connection(
-    _client_stream: &mut TcpStream,
+    client_stream: TcpStream,
     agent_stream: Arc<Mutex<TcpStream>>,
     container_port: u16,
 ) -> Result<()> {
@@ -132,7 +132,7 @@ fn handle_forwarded_connection(
         container_port
     );
 
-    // Send port forward request to agent
+    // Send port forward request to agent to initiate tunnel
     let message = AgentMessage {
         message: Some(ProtoMessage::StartPortForward(
             devcon_proto::StartPortForward {
@@ -141,17 +141,38 @@ fn handle_forwarded_connection(
         )),
     };
 
-    let mut agent = agent_stream.lock().unwrap();
-    send_message(&mut *agent, &message)?;
+    {
+        let mut agent = agent_stream.lock().unwrap();
+        send_message(&mut *agent, &message)?;
+    }
 
-    // Now we need to tunnel data bidirectionally
-    // For now, just log that we would tunnel
-    debug!(
-        "Would tunnel data between client and container port {}",
-        container_port
-    );
+    debug!("Sent tunnel request to agent, starting bidirectional proxy");
 
-    Ok(())
+    // Now tunnel data bidirectionally between client and agent
+    let agent = agent_stream.lock().unwrap();
+    let mut agent_read = agent.try_clone()?;
+    let mut agent_write = agent.try_clone()?;
+    drop(agent); // Release the lock
+
+    let mut client_read = client_stream.try_clone()?;
+    let mut client_write = client_stream;
+
+    // Spawn thread to copy from client to agent
+    let handle = std::thread::spawn(move || {
+        let result = std::io::copy(&mut client_read, &mut agent_write);
+        let _ = agent_write.shutdown(std::net::Shutdown::Write);
+        result
+    });
+
+    // Copy from agent to client in this thread
+    let result = std::io::copy(&mut agent_read, &mut client_write);
+    let _ = client_write.shutdown(std::net::Shutdown::Write);
+
+    // Wait for the other direction to complete
+    let _ = handle.join();
+
+    debug!("Tunnel closed for container port {}", container_port);
+    result.map(|_| ()).map_err(|e| e.into())
 }
 
 /// Send a protobuf message over a TCP stream with length prefix
