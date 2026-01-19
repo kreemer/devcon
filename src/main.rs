@@ -98,6 +98,18 @@ enum Commands {
         #[arg(help = "Create the config file if it does not exist", long, short)]
         create_if_missing: bool,
     },
+    /// Starts the control server for agent connections
+    #[command(about = "Start the control server for managing agent connections")]
+    Serve {
+        /// Port to listen on
+        #[arg(
+            help = "Port to listen on for agent connections",
+            long,
+            short,
+            default_value = "15000"
+        )]
+        port: u16,
+    },
 }
 
 fn main() -> anyhow::Result<()> {
@@ -133,6 +145,9 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Config { create_if_missing } => {
             handle_config_command(*create_if_missing)?;
+        }
+        Commands::Serve { port } => {
+            handle_serve_command(*port)?;
         }
     }
 

@@ -503,13 +503,13 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         env_variables: &[String],
     ) -> anyhow::Result<JoinHandle<()>> {
         let handles = self.runtime.list()?;
-        let handle = handles
+        let existing_handle = handles
             .iter()
             .find(|(name, _)| name == &self.get_container_name(&devcontainer_workspace));
 
-        if handle.is_some() {
+        if let Some((_, handle)) = existing_handle {
             info!("Container already running, starting listener for existing container");
-            return self.start_agent_listener(&devcontainer_workspace);
+            return self.start_agent_listener(&devcontainer_workspace, handle.as_ref());
         }
 
         let images = self.runtime.images()?;
@@ -702,8 +702,9 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             None => { /* No onCreateCommand specified */ }
         };
 
-        // Start listener for agent messages and return the handle
-        let listener_handle = self.start_agent_listener(&devcontainer_workspace)?;
+        // Start listener for agent messages and pass the container handle
+        let listener_handle =
+            self.start_agent_listener(&devcontainer_workspace, handle.as_ref())?;
 
         Ok(listener_handle)
     }
@@ -894,6 +895,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
     fn start_agent_listener(
         &self,
         devcontainer_workspace: &Workspace,
+        _container_handle: &dyn super::runtime::ContainerHandle,
     ) -> anyhow::Result<JoinHandle<()>> {
         info!("Starting agent message listener using file-based IPC...");
 
@@ -977,20 +979,18 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         if let Some(ref message) = msg.message {
             match message {
                 agent_message::Message::StartPortForward(req) => {
+                    let port = req.port as u16;
                     info!(
-                        "🔍 Agent discovered port {} listening in container",
-                        req.port
-                    );
-                    info!(
-                        "💡 Add port {} to 'forwardPorts' in devcontainer.json to auto-forward",
-                        req.port
+                        "Port {} is now forwarded - accessible at http://localhost:{}",
+                        port, port
                     );
                 }
                 agent_message::Message::StopPortForward(req) => {
-                    debug!("Agent stopped forwarding port {}", req.port);
+                    let port = req.port as u16;
+                    debug!("Port forwarding stopped for port {}", port);
                 }
                 agent_message::Message::OpenUrl(req) => {
-                    info!("🌐 Agent requested to open URL: {}", req.url);
+                    info!("Opening URL: {}", req.url);
 
                     // Try to open the URL on the host
                     #[cfg(target_os = "macos")]
