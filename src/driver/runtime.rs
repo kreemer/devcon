@@ -237,19 +237,4 @@ pub trait ContainerRuntime: Send {
     ///
     /// Returns an error if the list images command fails or output cannot be parsed.
     fn images(&self) -> anyhow::Result<Vec<String>>;
-
-    /// Gets the IP address of a running container.
-    ///
-    /// # Arguments
-    ///
-    /// * `container_handle` - Handle of the container
-    ///
-    /// # Returns
-    ///
-    /// The IP address of the container as a string.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the inspect command fails or IP cannot be determined.
-    fn get_ip(&self, container_handle: &dyn ContainerHandle) -> anyhow::Result<String>;
 }

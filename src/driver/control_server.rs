@@ -32,6 +32,7 @@ use prost::Message;
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tracing::{debug, error, info, warn};
@@ -39,14 +40,20 @@ use tracing::{debug, error, info, warn};
 /// Manages active port forwarding sessions
 #[derive(Clone)]
 struct PortForwardManager {
-    /// Map of local_port -> (container_stream, container_port)
-    forwards: Arc<Mutex<HashMap<u16, (Arc<Mutex<TcpStream>>, u16)>>>,
+    /// Map of local_port -> (agent_stream, container_port, tunnel_id_counter)
+    forwards: Arc<Mutex<HashMap<u16, (Arc<Mutex<TcpStream>>, u16, Arc<AtomicU32>)>>>,
+    /// Map of tunnel_id -> pending client stream
+    pending_tunnels: Arc<Mutex<HashMap<u32, TcpStream>>>,
+    /// Control server port for tunnel connections
+    control_port: u16,
 }
 
 impl PortForwardManager {
-    fn new() -> Self {
+    fn new(control_port: u16) -> Self {
         Self {
             forwards: Arc::new(Mutex::new(HashMap::new())),
+            pending_tunnels: Arc::new(Mutex::new(HashMap::new())),
+            control_port,
         }
     }
 
@@ -73,21 +80,34 @@ impl PortForwardManager {
         );
 
         // Store the forward mapping
-        forwards.insert(local_port, (stream.clone(), container_port));
+        let tunnel_id_counter = Arc::new(AtomicU32::new(1));
+        forwards.insert(
+            local_port,
+            (stream.clone(), container_port, tunnel_id_counter.clone()),
+        );
 
         // Spawn thread to accept connections on this port
         let stream_clone = stream.clone();
         let forwards_clone = self.forwards.clone();
+        let pending_tunnels = self.pending_tunnels.clone();
+        let control_port = self.control_port;
+
         thread::spawn(move || {
             for incoming_stream in listener.incoming() {
                 match incoming_stream {
                     Ok(client_stream) => {
                         let agent_stream = stream_clone.clone();
+                        let tunnel_id = tunnel_id_counter.fetch_add(1, Ordering::SeqCst);
+                        let pending_clone = pending_tunnels.clone();
+
                         thread::spawn(move || {
                             if let Err(e) = handle_forwarded_connection(
                                 client_stream,
                                 agent_stream,
                                 container_port,
+                                tunnel_id,
+                                pending_clone,
+                                control_port,
                             ) {
                                 error!("Error handling forwarded connection: {}", e);
                             }
@@ -108,6 +128,19 @@ impl PortForwardManager {
         Ok(())
     }
 
+    /// Register a client stream waiting for a tunnel
+    #[allow(dead_code)]
+    fn register_pending_tunnel(&self, tunnel_id: u32, client_stream: TcpStream) {
+        let mut pending = self.pending_tunnels.lock().unwrap();
+        pending.insert(tunnel_id, client_stream);
+    }
+
+    /// Get and remove a pending tunnel client stream
+    fn take_pending_tunnel(&self, tunnel_id: u32) -> Option<TcpStream> {
+        let mut pending = self.pending_tunnels.lock().unwrap();
+        pending.remove(&tunnel_id)
+    }
+
     /// Stop forwarding a port
     fn stop_forward(&self, local_port: u16) -> Result<()> {
         let mut forwards = self.forwards.lock().unwrap();
@@ -122,57 +155,44 @@ impl PortForwardManager {
 }
 
 /// Handle a forwarded connection from host to container
+/// This sends a tunnel request to the agent and waits for it to connect back
 fn handle_forwarded_connection(
     client_stream: TcpStream,
     agent_stream: Arc<Mutex<TcpStream>>,
     container_port: u16,
+    tunnel_id: u32,
+    pending_tunnels: Arc<Mutex<HashMap<u32, TcpStream>>>,
+    control_port: u16,
 ) -> Result<()> {
     debug!(
-        "Handling forwarded connection to container port {}",
-        container_port
+        "Handling forwarded connection to container port {}, tunnel_id={}",
+        container_port, tunnel_id
     );
 
-    // Send port forward request to agent to initiate tunnel
-    let message = AgentMessage {
-        message: Some(ProtoMessage::StartPortForward(
-            devcon_proto::StartPortForward {
-                port: container_port as u32,
-            },
-        )),
-    };
-
+    // Store the client stream as pending
     {
-        let mut agent = agent_stream.lock().unwrap();
-        send_message(&mut *agent, &message)?;
+        let mut pending = pending_tunnels.lock().unwrap();
+        pending.insert(tunnel_id, client_stream);
     }
 
-    debug!("Sent tunnel request to agent, starting bidirectional proxy");
+    // Send tunnel request to agent over control connection
+    let message = AgentMessage {
+        message: Some(ProtoMessage::TunnelRequest(devcon_proto::TunnelRequest {
+            port: container_port as u32,
+            tunnel_id,
+        })),
+    };
 
-    // Now tunnel data bidirectionally between client and agent
-    let agent = agent_stream.lock().unwrap();
-    let mut agent_read = agent.try_clone()?;
-    let mut agent_write = agent.try_clone()?;
-    drop(agent); // Release the lock
+    let mut agent = agent_stream.lock().unwrap();
+    send_message(&mut *agent, &message)?;
+    drop(agent); // Release lock immediately
 
-    let mut client_read = client_stream.try_clone()?;
-    let mut client_write = client_stream;
+    debug!(
+        "Sent tunnel request to agent for port {}, tunnel_id={}, waiting for agent to connect back on port {}",
+        container_port, tunnel_id, control_port
+    );
 
-    // Spawn thread to copy from client to agent
-    let handle = std::thread::spawn(move || {
-        let result = std::io::copy(&mut client_read, &mut agent_write);
-        let _ = agent_write.shutdown(std::net::Shutdown::Write);
-        result
-    });
-
-    // Copy from agent to client in this thread
-    let result = std::io::copy(&mut agent_read, &mut client_write);
-    let _ = client_write.shutdown(std::net::Shutdown::Write);
-
-    // Wait for the other direction to complete
-    let _ = handle.join();
-
-    debug!("Tunnel closed for container port {}", container_port);
-    result.map(|_| ()).map_err(|e| e.into())
+    Ok(())
 }
 
 /// Send a protobuf message over a TCP stream with length prefix
@@ -237,6 +257,91 @@ fn read_message(stream: &mut TcpStream) -> Result<AgentMessage> {
     Ok(message)
 }
 
+/// Handle incoming connection - determine if it's a control connection or tunnel connection
+fn handle_connection(mut stream: TcpStream, manager: PortForwardManager) -> Result<()> {
+    let peer_addr = stream.peer_addr()?;
+
+    // Peek at first 4 bytes to determine connection type
+    let mut peek_buf = [0u8; 4];
+    match stream.peek(&mut peek_buf) {
+        Ok(n) if n == 4 => {
+            let first_u32 = u32::from_be_bytes(peek_buf);
+
+            // Heuristic: if first 4 bytes look like a tunnel_id (small number < 1000000),
+            // treat as tunnel connection. Otherwise, treat as control connection.
+            // Control connections have length prefix which would be much larger for valid protobuf
+            if first_u32 < 1_000_000 {
+                // Likely a tunnel_id - handle as tunnel connection
+                stream.read_exact(&mut peek_buf)?; // Consume the tunnel_id bytes
+                let tunnel_id = u32::from_be_bytes(peek_buf);
+                debug!(
+                    "Detected tunnel connection from {} with tunnel_id={}",
+                    peer_addr, tunnel_id
+                );
+                handle_tunnel_connection(stream, tunnel_id, manager)
+            } else {
+                // Likely a protobuf message length - handle as control connection
+                debug!("Detected control connection from {}", peer_addr);
+                handle_agent_connection(stream, manager)
+            }
+        }
+        _ => {
+            // Can't peek, assume control connection
+            debug!(
+                "Cannot peek connection from {}, assuming control connection",
+                peer_addr
+            );
+            handle_agent_connection(stream, manager)
+        }
+    }
+}
+
+/// Handle a tunnel connection from agent
+fn handle_tunnel_connection(
+    agent_stream: TcpStream,
+    tunnel_id: u32,
+    manager: PortForwardManager,
+) -> Result<()> {
+    debug!("Handling tunnel connection for tunnel_id={}", tunnel_id);
+
+    // Get the pending client stream for this tunnel_id
+    let client_stream = manager.take_pending_tunnel(tunnel_id);
+
+    if client_stream.is_none() {
+        warn!("No pending client found for tunnel_id={}", tunnel_id);
+        return Ok(());
+    }
+
+    let client_stream = client_stream.unwrap();
+    info!(
+        "Matched tunnel_id={} with pending client, starting bidirectional proxy",
+        tunnel_id
+    );
+
+    // Proxy data bidirectionally
+    let mut agent_read = agent_stream.try_clone()?;
+    let mut agent_write = agent_stream;
+    let mut client_read = client_stream.try_clone()?;
+    let mut client_write = client_stream;
+
+    // Spawn thread to copy from client to agent
+    let handle = thread::spawn(move || {
+        let result = std::io::copy(&mut client_read, &mut agent_write);
+        let _ = agent_write.shutdown(std::net::Shutdown::Write);
+        result
+    });
+
+    // Copy from agent to client in this thread
+    let result = std::io::copy(&mut agent_read, &mut client_write);
+    let _ = client_write.shutdown(std::net::Shutdown::Write);
+
+    // Wait for the other direction to complete
+    let _ = handle.join();
+
+    debug!("Tunnel closed for tunnel_id={}", tunnel_id);
+    result.map(|_| ()).map_err(|e| e.into())
+}
+
 /// Handle a single agent connection
 fn handle_agent_connection(mut stream: TcpStream, manager: PortForwardManager) -> Result<()> {
     let peer_addr = stream.peer_addr()?;
@@ -269,6 +374,11 @@ fn handle_agent_connection(mut stream: TcpStream, manager: PortForwardManager) -
                         error!("Failed to open URL: {}", e);
                     }
                 }
+                Some(ProtoMessage::TunnelRequest(_)) => {
+                    warn!(
+                        "Received unexpected TunnelRequest from agent (this should only go agent->host)"
+                    );
+                }
                 None => {
                     warn!("Received message with no content");
                 }
@@ -300,15 +410,15 @@ pub fn start_control_server(port: u16) -> Result<()> {
 
     info!("Control server listening on 0.0.0.0:{}", port);
 
-    let manager = PortForwardManager::new();
+    let manager = PortForwardManager::new(port);
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 let manager_clone = manager.clone();
                 thread::spawn(move || {
-                    if let Err(e) = handle_agent_connection(stream, manager_clone) {
-                        error!("Error handling agent connection: {}", e);
+                    if let Err(e) = handle_connection(stream, manager_clone) {
+                        error!("Error handling connection: {}", e);
                     }
                 });
             }
