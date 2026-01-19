@@ -121,25 +121,4 @@ pub trait ContainerRuntime: Send {
     ///
     /// Returns an error if the list images command fails or output cannot be parsed.
     fn images(&self) -> anyhow::Result<Vec<String>>;
-
-    /// Tail a file inside a running container, returning a child process
-    /// with stdout that can be read to follow the file contents.
-    ///
-    /// # Arguments
-    ///
-    /// * `container_handle` - Handle of the container
-    /// * `file_path` - Path to the file to tail inside the container
-    ///
-    /// # Returns
-    ///
-    /// A child process with stdout available for reading
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the tail command fails to start.
-    fn tail_file(
-        &self,
-        container_handle: &dyn ContainerHandle,
-        file_path: &str,
-    ) -> anyhow::Result<std::process::Child>;
 }

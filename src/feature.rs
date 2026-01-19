@@ -8,14 +8,18 @@
 //!
 //! ## Main Types
 //!
-//! - [`FeatureRef`] - A reference to a feature in devcontainer.json (URL + user options)
-//! - [`FeatureMetadata`] - The full feature definition from devcontainer-feature.json
-//! - [`FeatureSource`] - Defines where a feature comes from (registry or local)
+//! - [`Feature`] - The full feature definition from devcontainer-feature.json
+//! - [`FeatureOption`] - Configuration option for a feature
+//! - [`LifecycleCommand`] - Command that can run at different container lifecycle stages
+//! - [`FeatureMount`] - Mount configuration for volumes or bind mounts
+//!
+//! ## Related Types
+//!
+//! For feature references and sources used in devcontainer.json, see the
+//! [`devcontainer`](crate::devcontainer) module.
 
-use serde::de;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::PathBuf;
 
 /// Represents the metadata from a devcontainer-feature.json file.
 ///
@@ -207,4 +211,236 @@ pub struct FeatureOption {
 pub enum FeatureOptionType {
     Boolean,
     String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_feature_minimal() {
+        let json = json!({
+            "id": "test-feature",
+            "version": "1.0.0"
+        });
+
+        let feature: Feature = serde_json::from_value(json).unwrap();
+        assert_eq!(feature.id, "test-feature");
+        assert_eq!(feature.version, "1.0.0");
+        assert!(feature.name.is_none());
+        assert!(feature.options.is_none());
+    }
+
+    #[test]
+    fn test_feature_with_options() {
+        let json = json!({
+            "id": "test-feature",
+            "version": "1.0.0",
+            "options": {
+                "version": {
+                    "type": "string",
+                    "default": "latest",
+                    "description": "Version to install"
+                },
+                "enabled": {
+                    "type": "boolean",
+                    "default": true
+                }
+            }
+        });
+
+        let feature: Feature = serde_json::from_value(json).unwrap();
+        let options = feature.options.unwrap();
+        assert_eq!(options.len(), 2);
+        assert!(options.contains_key("version"));
+        assert!(options.contains_key("enabled"));
+    }
+
+    #[test]
+    fn test_feature_option_with_enum() {
+        let json = json!({
+            "type": "string",
+            "default": "stable",
+            "enum": ["stable", "beta", "nightly"]
+        });
+
+        let option: FeatureOption = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            option.allowed_values.unwrap(),
+            vec!["stable", "beta", "nightly"]
+        );
+    }
+
+    #[test]
+    fn test_feature_option_with_proposals() {
+        let json = json!({
+            "type": "string",
+            "default": "3.11",
+            "proposals": ["3.9", "3.10", "3.11", "3.12"]
+        });
+
+        let option: FeatureOption = serde_json::from_value(json).unwrap();
+        assert_eq!(
+            option.proposals.unwrap(),
+            vec!["3.9", "3.10", "3.11", "3.12"]
+        );
+    }
+
+    #[test]
+    fn test_lifecycle_command_string() {
+        let json = json!("echo 'hello'");
+        let cmd: LifecycleCommand = serde_json::from_value(json).unwrap();
+        assert!(matches!(cmd, LifecycleCommand::String(_)));
+    }
+
+    #[test]
+    fn test_lifecycle_command_array() {
+        let json = json!(["echo", "hello"]);
+        let cmd: LifecycleCommand = serde_json::from_value(json).unwrap();
+        assert!(matches!(cmd, LifecycleCommand::Array(_)));
+    }
+
+    #[test]
+    fn test_lifecycle_command_object() {
+        let json = json!({
+            "server": "npm start",
+            "db": ["docker", "run", "postgres"]
+        });
+        let cmd: LifecycleCommand = serde_json::from_value(json).unwrap();
+        if let LifecycleCommand::Object(map) = cmd {
+            assert_eq!(map.len(), 2);
+            assert!(map.contains_key("server"));
+            assert!(map.contains_key("db"));
+        } else {
+            panic!("Expected Object variant");
+        }
+    }
+
+    #[test]
+    fn test_feature_mount_string() {
+        let json = json!("source=/var/run/docker.sock,target=/var/run/docker.sock,type=bind");
+        let mount: FeatureMount = serde_json::from_value(json).unwrap();
+        assert!(matches!(mount, FeatureMount::String(_)));
+    }
+
+    #[test]
+    fn test_feature_mount_structured() {
+        let json = json!({
+            "type": "bind",
+            "source": "/var/run/docker.sock",
+            "target": "/var/run/docker.sock"
+        });
+        let mount: FeatureMount = serde_json::from_value(json).unwrap();
+        if let FeatureMount::Structured(s) = mount {
+            assert!(matches!(s.mount_type, MountType::Bind));
+            assert_eq!(s.source.unwrap(), "/var/run/docker.sock");
+            assert_eq!(s.target, "/var/run/docker.sock");
+        } else {
+            panic!("Expected Structured variant");
+        }
+    }
+
+    #[test]
+    fn test_feature_mount_volume() {
+        let json = json!({
+            "type": "volume",
+            "target": "/data"
+        });
+        let mount: FeatureMount = serde_json::from_value(json).unwrap();
+        if let FeatureMount::Structured(s) = mount {
+            assert!(matches!(s.mount_type, MountType::Volume));
+            assert!(s.source.is_none());
+            assert_eq!(s.target, "/data");
+        } else {
+            panic!("Expected Structured variant");
+        }
+    }
+
+    #[test]
+    fn test_feature_with_lifecycle_commands() {
+        let json = json!({
+            "id": "test-feature",
+            "version": "1.0.0",
+            "onCreateCommand": "echo 'created'",
+            "postStartCommand": ["echo", "started"],
+            "postAttachCommand": {
+                "welcome": "echo 'Welcome!'"
+            }
+        });
+
+        let feature: Feature = serde_json::from_value(json).unwrap();
+        assert!(feature.on_create_command.is_some());
+        assert!(feature.post_start_command.is_some());
+        assert!(feature.post_attach_command.is_some());
+    }
+
+    #[test]
+    fn test_feature_with_container_config() {
+        let json = json!({
+            "id": "test-feature",
+            "version": "1.0.0",
+            "capAdd": ["SYS_PTRACE"],
+            "securityOpt": ["seccomp=unconfined"],
+            "privileged": true,
+            "init": true
+        });
+
+        let feature: Feature = serde_json::from_value(json).unwrap();
+        assert_eq!(feature.cap_add.unwrap(), vec!["SYS_PTRACE"]);
+        assert_eq!(feature.security_opt.unwrap(), vec!["seccomp=unconfined"]);
+        assert_eq!(feature.privileged, Some(true));
+        assert_eq!(feature.init, Some(true));
+    }
+
+    #[test]
+    fn test_feature_with_depends_on() {
+        let json = json!({
+            "id": "test-feature",
+            "version": "1.0.0",
+            "dependsOn": {
+                "ghcr.io/devcontainers/features/common-utils": {}
+            }
+        });
+
+        let feature: Feature = serde_json::from_value(json).unwrap();
+        let deps = feature.depends_on.unwrap();
+        assert!(deps.contains_key("ghcr.io/devcontainers/features/common-utils"));
+    }
+
+    #[test]
+    fn test_feature_serialization_roundtrip() {
+        let feature = Feature {
+            id: "test".to_string(),
+            version: "1.0.0".to_string(),
+            name: Some("Test Feature".to_string()),
+            description: Some("A test feature".to_string()),
+            documentation_url: None,
+            license_url: None,
+            keywords: Some(vec!["test".to_string()]),
+            options: None,
+            installs_after: None,
+            depends_on: None,
+            deprecated: None,
+            legacy_ids: None,
+            cap_add: None,
+            security_opt: None,
+            privileged: None,
+            init: None,
+            entrypoint: None,
+            mounts: None,
+            container_env: None,
+            customizations: None,
+            on_create_command: None,
+            update_content_command: None,
+            post_create_command: None,
+            post_start_command: None,
+            post_attach_command: None,
+        };
+
+        let json = serde_json::to_value(&feature).unwrap();
+        let deserialized: Feature = serde_json::from_value(json).unwrap();
+        assert_eq!(feature.id, deserialized.id);
+        assert_eq!(feature.version, deserialized.version);
+    }
 }

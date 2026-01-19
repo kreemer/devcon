@@ -93,6 +93,7 @@ impl LifecycleCommandValue {
 /// Represents a port forwarding configuration
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
+#[allow(dead_code)]
 pub enum ForwardPort {
     /// Simple port number
     Port(u16),
@@ -103,6 +104,7 @@ pub enum ForwardPort {
 /// Port attributes for forwarded ports
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct PortAttributes {
     pub on_auto_forward: Option<OnAutoForward>,
     pub elevate_if_needed: Option<bool>,
@@ -162,6 +164,7 @@ pub enum MountType {
 /// Build configuration for Dockerfile-based containers
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct BuildConfig {
     pub dockerfile: Option<String>,
     pub context: Option<String>,
@@ -174,6 +177,7 @@ pub struct BuildConfig {
 /// Cache from configuration
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
+#[allow(dead_code)]
 pub enum CacheFrom {
     Single(String),
     Multiple(Vec<String>),
@@ -182,6 +186,7 @@ pub enum CacheFrom {
 /// Docker Compose configuration
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct ComposeConfig {
     pub docker_compose_file: ComposeFile,
     pub service: String,
@@ -191,6 +196,7 @@ pub struct ComposeConfig {
 /// Docker Compose file reference
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
+#[allow(dead_code)]
 pub enum ComposeFile {
     Single(String),
     Multiple(Vec<String>),
@@ -199,6 +205,7 @@ pub enum ComposeFile {
 /// Application port configuration
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
+#[allow(dead_code)]
 pub enum AppPort {
     Single(AppPortValue),
     Multiple(Vec<AppPortValue>),
@@ -207,6 +214,7 @@ pub enum AppPort {
 /// Individual app port value
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
+#[allow(dead_code)]
 pub enum AppPortValue {
     Port(u16),
     Mapping(String),
@@ -245,6 +253,7 @@ pub enum WaitFor {
 /// Host requirements
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct HostRequirements {
     pub cpus: Option<u32>,
     pub memory: Option<String>,
@@ -255,6 +264,7 @@ pub struct HostRequirements {
 /// GPU requirement
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
+#[allow(dead_code)]
 pub enum GpuRequirement {
     Boolean(bool),
     Optional(String), // "optional"
@@ -264,6 +274,7 @@ pub enum GpuRequirement {
 /// Detailed GPU requirements
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
+#[allow(dead_code)]
 pub struct DetailedGpuRequirement {
     pub cores: Option<u32>,
     pub memory: Option<String>,
@@ -334,6 +345,7 @@ pub struct DetailedGpuRequirement {
 /// * `customizations` - Tool-specific customizations
 /// * `additional_properties` - Other unspecified properties
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct Devcontainer {
     // General properties
     pub name: Option<String>,
@@ -396,6 +408,7 @@ pub struct Devcontainer {
     pub additional_properties: Option<HashMap<String, Value>>,
 }
 
+#[allow(deprecated)]
 impl<'de> Deserialize<'de> for Devcontainer {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -672,6 +685,7 @@ pub enum FeatureSource {
 
 /// Metadata for a feature stored in an OCI registry.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct FeatureRegistry {
     pub owner: String,
     pub repository: String,

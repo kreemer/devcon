@@ -20,42 +20,6 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-//! # Container Drivers
-//!
-//! This module provides the core functionality for building and managing
-//! development containers.
-//!
-//! ## Overview
-//!
-//! The driver module handles:
-//! - Processing and downloading devcontainer features from registries
-//! - Building container images with Dockerfiles
-//! - Starting and managing container instances
-//!
-//! ## Submodules
-//!
-//! - [`container`] - Container lifecycle management (build, start, stop)
-//!
-//! ## Feature Processing
-//!
-//! Features can be sourced from:
-//! - **Registry** - Downloaded from OCI-compliant registries like ghcr.io
-//! - **Local** - Loaded from the local filesystem (not yet implemented)
-
-use std::fs::{self, File, copy};
-
-use anyhow::{Ok, bail};
-use dircpy::copy_dir;
-use indicatif::ProgressBar;
-use serde_json::Value;
-use tempfile::TempDir;
-use tracing::info;
-
-use crate::devcontainer::{
-    FeatureRef,
-    FeatureSource::{Local, Registry},
-};
-
 pub mod agent;
 pub mod container;
 pub mod feature_process;
