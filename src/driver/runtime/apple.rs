@@ -95,9 +95,7 @@ impl ContainerRuntime for AppleRuntime {
             .arg("-v")
             .arg(volume_mount)
             .arg("-l")
-            .arg(label)
-            .arg("-p")
-            .arg("15000:15000");
+            .arg(label);
 
         // Add environment variables
         for env_var in env_vars {

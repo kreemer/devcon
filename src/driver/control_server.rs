@@ -26,12 +26,12 @@
 //! container agents and manages port forwarding requests.
 
 use anyhow::{Context, Result, bail};
-use devcon_proto::agent_message::Message as ProtoMessage;
 use devcon_proto::AgentMessage;
+use devcon_proto::agent_message::Message as ProtoMessage;
 use prost::Message;
 use std::collections::HashMap;
 use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream, Shutdown};
+use std::net::{TcpListener, TcpStream};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use tracing::{debug, error, info, warn};
@@ -51,9 +51,14 @@ impl PortForwardManager {
     }
 
     /// Start forwarding a port through the control connection
-    fn start_forward(&self, local_port: u16, container_port: u16, stream: Arc<Mutex<TcpStream>>) -> Result<()> {
+    fn start_forward(
+        &self,
+        local_port: u16,
+        container_port: u16,
+        stream: Arc<Mutex<TcpStream>>,
+    ) -> Result<()> {
         let mut forwards = self.forwards.lock().unwrap();
-        
+
         if forwards.contains_key(&local_port) {
             bail!("Port {} is already being forwarded", local_port);
         }
@@ -61,12 +66,15 @@ impl PortForwardManager {
         // Start the local listener for this port
         let listener = TcpListener::bind(format!("127.0.0.1:{}", local_port))
             .context(format!("Failed to bind to port {}", local_port))?;
-        
-        info!("Listening on 127.0.0.1:{} for connections to forward to container port {}", local_port, container_port);
-        
+
+        info!(
+            "Listening on 127.0.0.1:{} for connections to forward to container port {}",
+            local_port, container_port
+        );
+
         // Store the forward mapping
         forwards.insert(local_port, (stream.clone(), container_port));
-        
+
         // Spawn thread to accept connections on this port
         let stream_clone = stream.clone();
         let forwards_clone = self.forwards.clone();
@@ -76,7 +84,11 @@ impl PortForwardManager {
                     Ok(mut client_stream) => {
                         let agent_stream = stream_clone.clone();
                         thread::spawn(move || {
-                            if let Err(e) = handle_forwarded_connection(&mut client_stream, agent_stream, container_port) {
+                            if let Err(e) = handle_forwarded_connection(
+                                &mut client_stream,
+                                agent_stream,
+                                container_port,
+                            ) {
                                 error!("Error handling forwarded connection: {}", e);
                             }
                         });
@@ -99,7 +111,7 @@ impl PortForwardManager {
     /// Stop forwarding a port
     fn stop_forward(&self, local_port: u16) -> Result<()> {
         let mut forwards = self.forwards.lock().unwrap();
-        
+
         if forwards.remove(&local_port).is_some() {
             info!("Stopped forwarding port {}", local_port);
             Ok(())
@@ -111,26 +123,34 @@ impl PortForwardManager {
 
 /// Handle a forwarded connection from host to container
 fn handle_forwarded_connection(
-    client_stream: &mut TcpStream,
+    _client_stream: &mut TcpStream,
     agent_stream: Arc<Mutex<TcpStream>>,
     container_port: u16,
 ) -> Result<()> {
-    debug!("Handling forwarded connection to container port {}", container_port);
-    
+    debug!(
+        "Handling forwarded connection to container port {}",
+        container_port
+    );
+
     // Send port forward request to agent
     let message = AgentMessage {
-        message: Some(ProtoMessage::StartPortForward(devcon_proto::StartPortForward {
-            port: container_port as u32,
-        })),
+        message: Some(ProtoMessage::StartPortForward(
+            devcon_proto::StartPortForward {
+                port: container_port as u32,
+            },
+        )),
     };
-    
+
     let mut agent = agent_stream.lock().unwrap();
     send_message(&mut *agent, &message)?;
-    
+
     // Now we need to tunnel data bidirectionally
     // For now, just log that we would tunnel
-    debug!("Would tunnel data between client and container port {}", container_port);
-    
+    debug!(
+        "Would tunnel data between client and container port {}",
+        container_port
+    );
+
     Ok(())
 }
 
@@ -138,25 +158,61 @@ fn handle_forwarded_connection(
 fn send_message(stream: &mut TcpStream, message: &AgentMessage) -> Result<()> {
     let mut buf = Vec::new();
     message.encode(&mut buf)?;
-    
+
     let len = buf.len() as u32;
     stream.write_all(&len.to_be_bytes())?;
     stream.write_all(&buf)?;
     stream.flush()?;
-    
+
+    Ok(())
+}
+
+/// Open a URL in the default browser
+fn open_url(url: &str) -> Result<()> {
+    info!("Opening URL in browser: {}", url);
+    open::that(url).context("Failed to open URL in browser")?;
+    info!("Successfully opened URL");
     Ok(())
 }
 
 /// Read a protobuf message from a TCP stream with length prefix
 fn read_message(stream: &mut TcpStream) -> Result<AgentMessage> {
     let mut len_buf = [0u8; 4];
-    stream.read_exact(&mut len_buf)?;
+
+    // Try to read the length prefix
+    match stream.read_exact(&mut len_buf) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+            bail!("Connection closed while reading message length");
+        }
+        Err(e) => return Err(e.into()),
+    }
+
     let len = u32::from_be_bytes(len_buf) as usize;
-    
+
+    // Validate message length to prevent excessive memory allocation
+    if len == 0 {
+        bail!("Received zero-length message");
+    }
+    if len > 10 * 1024 * 1024 {
+        bail!("Message too large: {} bytes (max 10MB)", len);
+    }
+
     let mut buf = vec![0u8; len];
-    stream.read_exact(&mut buf)?;
-    
-    let message = AgentMessage::decode(&buf[..])?;
+
+    // Try to read the message body
+    match stream.read_exact(&mut buf) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
+            bail!(
+                "Connection closed while reading message body (expected {} bytes)",
+                len
+            );
+        }
+        Err(e) => return Err(e.into()),
+    }
+
+    let message = AgentMessage::decode(&buf[..]).context("Failed to decode protobuf message")?;
     Ok(message)
 }
 
@@ -164,41 +220,47 @@ fn read_message(stream: &mut TcpStream) -> Result<AgentMessage> {
 fn handle_agent_connection(mut stream: TcpStream, manager: PortForwardManager) -> Result<()> {
     let peer_addr = stream.peer_addr()?;
     info!("New agent connection from {}", peer_addr);
-    
+
     let stream_arc = Arc::new(Mutex::new(stream.try_clone()?));
-    
+
     loop {
         match read_message(&mut stream) {
-            Ok(message) => {
-                match message.message {
-                    Some(ProtoMessage::StartPortForward(fwd)) => {
-                        let port = fwd.port as u16;
-                        info!("Agent requested port forward: {}", port);
-                        
-                        if let Err(e) = manager.start_forward(port, port, stream_arc.clone()) {
-                            error!("Failed to start port forward: {}", e);
-                        }
-                    }
-                    Some(ProtoMessage::StopPortForward(fwd)) => {
-                        let port = fwd.port as u32 as u16;
-                        info!("Agent requested stop port forward: {}", port);
-                        
-                        if let Err(e) = manager.stop_forward(port) {
-                            error!("Failed to stop port forward: {}", e);
-                        }
-                    }
-                    Some(ProtoMessage::OpenUrl(url_msg)) => {
-                        info!("Agent requested to open URL: {}", url_msg.url);
-                        // Could implement URL opening here
-                    }
-                    None => {
-                        warn!("Received message with no content");
+            Ok(message) => match message.message {
+                Some(ProtoMessage::StartPortForward(fwd)) => {
+                    let port = fwd.port as u16;
+                    info!("Agent requested port forward: {}", port);
+
+                    if let Err(e) = manager.start_forward(port, port, stream_arc.clone()) {
+                        error!("Failed to start port forward: {}", e);
                     }
                 }
-            }
+                Some(ProtoMessage::StopPortForward(fwd)) => {
+                    let port = fwd.port as u32 as u16;
+                    info!("Agent requested stop port forward: {}", port);
+
+                    if let Err(e) = manager.stop_forward(port) {
+                        error!("Failed to stop port forward: {}", e);
+                    }
+                }
+                Some(ProtoMessage::OpenUrl(url_msg)) => {
+                    info!("Agent requested to open URL: {}", url_msg.url);
+                    if let Err(e) = open_url(&url_msg.url) {
+                        error!("Failed to open URL: {}", e);
+                    }
+                }
+                None => {
+                    warn!("Received message with no content");
+                }
+            },
             Err(e) => {
-                if e.to_string().contains("UnexpectedEof") || e.to_string().contains("connection reset") {
-                    info!("Agent connection closed from {}", peer_addr);
+                let err_str = e.to_string();
+                if err_str.contains("Connection closed")
+                    || err_str.contains("UnexpectedEof")
+                    || err_str.contains("connection reset")
+                    || err_str.contains("Connection reset")
+                {
+                    debug!("Agent connection closed from {}: {}", peer_addr, e);
+                    info!("Agent {} disconnected", peer_addr);
                 } else {
                     error!("Error reading from agent {}: {}", peer_addr, e);
                 }
@@ -206,19 +268,19 @@ fn handle_agent_connection(mut stream: TcpStream, manager: PortForwardManager) -
             }
         }
     }
-    
+
     Ok(())
 }
 
 /// Start the control server on the specified port
 pub fn start_control_server(port: u16) -> Result<()> {
-    let listener = TcpListener::bind(format!("127.0.0.1:{}", port))
+    let listener = TcpListener::bind(format!("0.0.0.0:{}", port))
         .context(format!("Failed to bind to port {}", port))?;
-    
-    info!("Control server listening on 127.0.0.1:{}", port);
-    
+
+    info!("Control server listening on 0.0.0.0:{}", port);
+
     let manager = PortForwardManager::new();
-    
+
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
@@ -234,6 +296,6 @@ pub fn start_control_server(port: u16) -> Result<()> {
             }
         }
     }
-    
+
     Ok(())
 }
