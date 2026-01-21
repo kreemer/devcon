@@ -35,6 +35,7 @@ use std::{
     time::Duration,
 };
 
+use console::{Style, strip_ansi_codes};
 use indicatif::{ProgressBar, ProgressStyle};
 
 pub mod apple;
@@ -44,9 +45,9 @@ pub mod docker;
 ///
 /// This function:
 /// - Captures stdout and stderr from the child process
-/// - Maintains a rolling buffer of the last 10 lines
-/// - Displays the buffer in a progress spinner
-/// - Prints the final buffered output after the process completes
+/// - Prints all lines as they arrive (permanent output)
+/// - Maintains a rolling buffer of the last 10 lines displayed at the bottom
+/// - If the process fails, prints the complete output again
 ///
 /// # Arguments
 ///
@@ -61,59 +62,92 @@ pub fn stream_build_output(mut child: Child) -> anyhow::Result<std::process::Exi
 
     println!("Building Image..");
 
-    // Shared buffer for last 10 lines
-    let lines_buffer: Arc<Mutex<VecDeque<String>>> =
+    // Buffer for last 10 lines (rolling window)
+    let rolling_buffer: Arc<Mutex<VecDeque<String>>> =
         Arc::new(Mutex::new(VecDeque::with_capacity(10)));
-    let buffer_clone = Arc::clone(&lines_buffer);
 
-    let bar = ProgressBar::new_spinner()
-        .with_style(ProgressStyle::default_spinner().template("{spinner}\n{msg}")?);
+    // Buffer for all output (for error reporting)
+    let all_output: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+
+    let rolling_clone = Arc::clone(&rolling_buffer);
+    let all_output_clone = Arc::clone(&all_output);
+
+    let bar = ProgressBar::new_spinner();
+    bar.set_style(ProgressStyle::default_spinner().template("{spinner} {msg}")?);
     bar.enable_steady_tick(Duration::from_millis(100));
 
     let bar_clone = bar.clone();
 
     // Stream stdout in a separate thread
     let stdout_thread = stdout.map(|stdout| {
-        let buffer = Arc::clone(&lines_buffer);
+        let rolling = Arc::clone(&rolling_buffer);
+        let all = Arc::clone(&all_output);
+        let bar = bar_clone.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines().map_while(Result::ok) {
-                let mut buf = buffer.lock().unwrap();
-                if buf.len() >= 10 {
-                    buf.pop_front();
+                // Print line permanently (with original ANSI codes)
+                bar.println(&line);
+
+                // Strip ANSI codes before adding to rolling buffer
+                let clean_line = strip_ansi_codes(&line).to_string();
+
+                // Add to rolling buffer
+                let mut roll = rolling.lock().unwrap();
+                if roll.len() >= 10 {
+                    roll.pop_front();
                 }
-                buf.push_back(line);
+                roll.push_back(clean_line);
+                drop(roll);
+
+                // Add to complete output (with original ANSI codes)
+                let mut all_buf = all.lock().unwrap();
+                all_buf.push(line);
             }
         })
     });
 
     // Stream stderr in a separate thread
     let stderr_thread = stderr.map(|stderr| {
-        let buffer = Arc::clone(&buffer_clone);
+        let rolling = Arc::clone(&rolling_clone);
+        let all = Arc::clone(&all_output_clone);
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines().map_while(Result::ok) {
-                let mut buf = buffer.lock().unwrap();
-                if buf.len() >= 10 {
-                    buf.pop_front();
+                // Strip ANSI codes before adding to rolling buffer
+                let clean_line = strip_ansi_codes(&line).to_string();
+
+                // Add to rolling buffer
+                let mut roll = rolling.lock().unwrap();
+                if roll.len() >= 10 {
+                    roll.pop_front();
                 }
-                buf.push_back(line);
+                roll.push_back(clean_line);
+                drop(roll);
+
+                // Add to complete output
+                let mut all_buf = all.lock().unwrap();
+                all_buf.push(line);
             }
         })
     });
 
-    // Update progress bar with buffered lines
-    let display_buffer = Arc::clone(&buffer_clone);
+    // Update progress bar with last 10 lines
+    let display_buffer = Arc::clone(&rolling_clone);
+    let display_bar = bar.clone();
     let update_thread = std::thread::spawn(move || {
+        let grey_style = Style::new().dim();
         loop {
             let buf = display_buffer.lock().unwrap();
             if !buf.is_empty() {
-                let display_text = buf
-                    .iter()
-                    .map(|s| s.as_str())
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                bar_clone.set_message(display_text);
+                let display_text = format!(
+                    "\n{}",
+                    buf.iter()
+                        .map(|s| grey_style.apply_to(s).to_string())
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                );
+                display_bar.set_message(display_text);
             }
             drop(buf);
             std::thread::sleep(Duration::from_millis(100));
@@ -132,17 +166,21 @@ pub fn stream_build_output(mut child: Child) -> anyhow::Result<std::process::Exi
 
     let result = child.wait()?;
 
-    // Stop the update thread by finishing the progress bar
+    // Stop the update thread
     bar.finish_and_clear();
     drop(update_thread);
 
-    // Print final buffered output
-    let final_buffer = buffer_clone.lock().unwrap();
-    for line in final_buffer.iter() {
-        println!("{}", line);
+    // If the build failed, print the complete output for debugging
+    if !result.success() {
+        eprintln!("\n=== Build failed! Complete output: ===");
+        let full_output = all_output_clone.lock().unwrap();
+        for line in full_output.iter() {
+            eprintln!("{}", line);
+        }
+        eprintln!("=== End of output ===\n");
+    } else {
+        println!("Building image complete");
     }
-
-    println!("Building image complete");
 
     Ok(result)
 }
