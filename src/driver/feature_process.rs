@@ -591,6 +591,10 @@ fn download_and_cache_feature(
         oci_spec::image::MediaType::Other(str) => match str.as_str() {
             "application/vnd.devcontainers.layer.v1+tar"
             | "application/vnd.oci.image.layer.v1.tar" => {
+                debug!(
+                    "Extracting uncompressed layer for feature: {}",
+                    registry.name
+                );
                 let temp_file = temp_directory.path().join("feature.tar");
                 fs::write(&temp_file, &layer_bytes)?;
 
@@ -604,6 +608,10 @@ fn download_and_cache_feature(
             }
             "application/vnd.devcontainers.layer.v1+tar+gzip"
             | "application/vnd.oci.image.layer.v1.tar+gzip" => {
+                debug!(
+                    "Extracting gzip compressed layer for feature: {}",
+                    registry.name
+                );
                 let temp_file = temp_directory.path().join("feature.tar.gz");
                 fs::write(&temp_file, &layer_bytes)?;
 
@@ -633,12 +641,24 @@ fn download_and_cache_feature(
         }
     };
 
+    debug!(
+        "Feature {} extracted to temporary path: {}",
+        registry.name,
+        extract_path.display()
+    );
+
     // Move extracted feature to cache path
     fs::create_dir_all(cache_path)?;
 
     let mut options = fs_extra::dir::CopyOptions::new();
     options.overwrite = true;
     options.copy_inside = true;
+    options.content_only = true;
+
+    debug!(
+        "Copying extracted feature to cache path: {}",
+        cache_path.display()
+    );
     fs_extra::dir::copy(&extract_path, cache_path, &options)
         .map_err(|e| anyhow::anyhow!("Failed to copy extracted feature: {}", e))?;
 

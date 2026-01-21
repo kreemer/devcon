@@ -24,7 +24,7 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use tracing::{Level, trace};
 use tracing_indicatif::IndicatifLayer;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 use crate::command::*;
 
@@ -122,10 +122,26 @@ fn main() -> anyhow::Result<()> {
         _ => Level::TRACE,
     };
 
+    // Configure logging: third-party crates only log at trace level, our crate uses the configured level
+    let third_party_level = if level == Level::TRACE {
+        "trace"
+    } else {
+        "error"
+    };
+    let filter = EnvFilter::new(format!(
+        "{}={},reqwest={},hyper={},h2={},tower={}",
+        env!("CARGO_PKG_NAME").replace('-', "_"),
+        level,
+        third_party_level,
+        third_party_level,
+        third_party_level,
+        third_party_level
+    ));
+
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().with_writer(indicatif_layer.get_stderr_writer()))
         .with(indicatif_layer)
-        .with(tracing_subscriber::filter::LevelFilter::from_level(level))
+        .with(filter)
         .init();
 
     trace!("Starting devcon with CLI args: {:?}", cli);
