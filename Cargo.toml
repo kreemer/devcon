@@ -44,6 +44,7 @@ bytes = "1.9"
 console = "0.16.2"
 open = "5.3"
 strip-ansi-escapes = "0.2.1"
+sha2 = "0.10"
 
 [dev-dependencies]
 assert_cmd = "2.1.1"

@@ -57,6 +57,7 @@ use std::path::PathBuf;
 
 use anyhow::bail;
 use minijinja::Environment;
+use sha2::{Digest, Sha256};
 use tempfile::TempDir;
 use tracing::{debug, info, trace, warn};
 
@@ -538,9 +539,29 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         // Collect all mounts: from devcontainer config and features
         let mut all_mounts = Vec::new();
 
-        // Add mounts from devcontainer configuration
+        // Add mounts from devcontainer configuration with variable substitution
         if let Some(ref mounts) = devcontainer_workspace.devcontainer.mounts {
-            all_mounts.extend(mounts.clone());
+            for mount in mounts {
+                let substituted_mount = match mount {
+                    crate::devcontainer::Mount::String(s) => crate::devcontainer::Mount::String(
+                        self.substitute_mount_variables(s, &devcontainer_workspace),
+                    ),
+                    crate::devcontainer::Mount::Structured(structured) => {
+                        let mut new_mount = structured.clone();
+                        if let Some(ref source) = structured.source {
+                            new_mount.source = Some(
+                                self.substitute_mount_variables(source, &devcontainer_workspace),
+                            );
+                        }
+                        new_mount.target = self.substitute_mount_variables(
+                            &structured.target,
+                            &devcontainer_workspace,
+                        );
+                        crate::devcontainer::Mount::Structured(new_mount)
+                    }
+                };
+                all_mounts.push(substituted_mount);
+            }
         }
 
         // Process features to get their mounts
@@ -556,11 +577,13 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         let processed_features = process_features(&features)?;
         for feature_result in &processed_features {
             if let Some(ref mounts) = feature_result.feature.mounts {
-                // Convert feature::FeatureMount to devcontainer::Mount
+                // Convert feature::FeatureMount to devcontainer::Mount with variable substitution
                 for mount in mounts {
                     match mount {
                         crate::feature::FeatureMount::String(s) => {
-                            all_mounts.push(crate::devcontainer::Mount::String(s.clone()));
+                            let substituted =
+                                self.substitute_mount_variables(s, &devcontainer_workspace);
+                            all_mounts.push(crate::devcontainer::Mount::String(substituted));
                         }
                         crate::feature::FeatureMount::Structured(sm) => {
                             let mount_type = match sm.mount_type {
@@ -571,11 +594,16 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
                                     crate::devcontainer::MountType::Volume
                                 }
                             };
+                            let source = sm.source.as_ref().map(|s| {
+                                self.substitute_mount_variables(s, &devcontainer_workspace)
+                            });
+                            let target = self
+                                .substitute_mount_variables(&sm.target, &devcontainer_workspace);
                             all_mounts.push(crate::devcontainer::Mount::Structured(
                                 crate::devcontainer::StructuredMount {
                                     mount_type,
-                                    source: sm.source.clone(),
-                                    target: sm.target.clone(),
+                                    source,
+                                    target,
                                 },
                             ));
                         }
@@ -843,6 +871,74 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         )
     }
 
+    /// Generates a unique container ID for the devcontainer.
+    ///
+    /// The ID is a deterministic hash based on the devcontainer.json file content,
+    /// ensuring different configurations get different IDs. Falls back to hashing
+    /// the workspace path if the file cannot be read.
+    ///
+    /// # Returns
+    ///
+    /// A hex-encoded SHA256 hash of the devcontainer.json content.
+    fn get_devcontainer_id(&self, devcontainer_workspace: &Workspace) -> String {
+        let mut hasher = Sha256::new();
+
+        // Try to read and hash the devcontainer.json file content
+        let devcontainer_path = devcontainer_workspace
+            .path
+            .join(".devcontainer")
+            .join("devcontainer.json");
+
+        match fs::read_to_string(&devcontainer_path) {
+            Ok(content) => {
+                // Hash the file content for configuration-specific ID
+                hasher.update(content.as_bytes());
+            }
+            Err(_) => {
+                // Fallback to workspace path if file can't be read
+                hasher.update(devcontainer_workspace.path.to_string_lossy().as_bytes());
+            }
+        }
+
+        let result = hasher.finalize();
+        format!("{:x}", result)
+    }
+
+    /// Performs variable substitution on a mount string.
+    ///
+    /// Supports the following variables:
+    /// - `${devcontainerId}` - Unique ID for this container
+    /// - `${localWorkspaceFolder}` - Path to the workspace folder
+    /// - `${containerWorkspaceFolder}` - Path to workspace inside container
+    ///
+    /// # Arguments
+    ///
+    /// * `mount_str` - The mount string with variables to substitute
+    /// * `devcontainer_workspace` - The workspace to use for substitution
+    ///
+    /// # Returns
+    ///
+    /// The mount string with all variables substituted.
+    fn substitute_mount_variables(
+        &self,
+        mount_str: &str,
+        devcontainer_workspace: &Workspace,
+    ) -> String {
+        let devcontainer_id = self.get_devcontainer_id(devcontainer_workspace);
+        let workspace_name = devcontainer_workspace
+            .path
+            .file_name()
+            .unwrap()
+            .to_string_lossy();
+        let local_workspace = devcontainer_workspace.path.to_string_lossy();
+        let container_workspace = format!("/workspaces/{}", workspace_name);
+
+        mount_str
+            .replace("${devcontainerId}", &devcontainer_id)
+            .replace("${localWorkspaceFolder}", &local_workspace)
+            .replace("${containerWorkspaceFolder}", &container_workspace)
+    }
+
     /// Wraps a lifecycle command with proper environment and working directory setup.
     ///
     /// This ensures the command runs with:
@@ -1006,5 +1102,125 @@ mod tests {
         assert_eq!(ordered[0].feature.id, "feature-a");
         // feature-b should be second (not in override list)
         assert_eq!(ordered[1].feature.id, "feature-b");
+    }
+
+    #[test]
+    fn test_devcontainer_id_generation() {
+        use crate::config::Config;
+        use crate::driver::runtime::docker::DockerRuntime;
+        use std::fs;
+        use tempfile::TempDir;
+
+        // Create temporary workspaces
+        let temp_dir1 = TempDir::new().unwrap();
+        let temp_dir2 = TempDir::new().unwrap();
+        let temp_dir3 = TempDir::new().unwrap();
+
+        // Create devcontainer.json files with different content
+        let devcontainer_json1 = r#"{"image": "mcr.microsoft.com/devcontainers/base:latest"}"#;
+        let devcontainer_json2 = r#"{"image": "ubuntu:22.04"}"#;
+
+        fs::create_dir(temp_dir1.path().join(".devcontainer")).unwrap();
+        fs::write(
+            temp_dir1.path().join(".devcontainer/devcontainer.json"),
+            devcontainer_json1,
+        )
+        .unwrap();
+
+        fs::create_dir(temp_dir2.path().join(".devcontainer")).unwrap();
+        fs::write(
+            temp_dir2.path().join(".devcontainer/devcontainer.json"),
+            devcontainer_json2,
+        )
+        .unwrap();
+
+        // Third workspace with same content as first
+        fs::create_dir(temp_dir3.path().join(".devcontainer")).unwrap();
+        fs::write(
+            temp_dir3.path().join(".devcontainer/devcontainer.json"),
+            devcontainer_json1,
+        )
+        .unwrap();
+
+        let workspace1 = Workspace::try_from(temp_dir1.path().to_path_buf()).unwrap();
+        let workspace2 = Workspace::try_from(temp_dir2.path().to_path_buf()).unwrap();
+        let workspace3 = Workspace::try_from(temp_dir3.path().to_path_buf()).unwrap();
+
+        let config = Config::default();
+        let runtime = Box::new(DockerRuntime::new());
+        let driver = ContainerDriver::new(config, runtime);
+
+        let id1 = driver.get_devcontainer_id(&workspace1);
+        let id2 = driver.get_devcontainer_id(&workspace2);
+        let id3 = driver.get_devcontainer_id(&workspace3);
+
+        // IDs should be different for different configurations
+        assert_ne!(
+            id1, id2,
+            "Different devcontainer.json content should produce different IDs"
+        );
+
+        // IDs should be the same for same configuration, even in different paths
+        assert_eq!(
+            id1, id3,
+            "Same devcontainer.json content should produce same ID"
+        );
+
+        // ID should be consistent for the same workspace
+        let id1_again = driver.get_devcontainer_id(&workspace1);
+        assert_eq!(id1, id1_again);
+
+        // ID should be a valid hex string (64 chars for SHA256)
+        assert_eq!(id1.len(), 64);
+        assert!(id1.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+
+    #[test]
+    fn test_substitute_mount_variables() {
+        use crate::config::Config;
+        use crate::driver::runtime::docker::DockerRuntime;
+        use std::fs;
+        use tempfile::TempDir;
+
+        let temp_dir = TempDir::new().unwrap();
+        let devcontainer_json = r#"{"image": "mcr.microsoft.com/devcontainers/base:latest"}"#;
+        fs::create_dir(temp_dir.path().join(".devcontainer")).unwrap();
+        fs::write(
+            temp_dir.path().join(".devcontainer/devcontainer.json"),
+            devcontainer_json,
+        )
+        .unwrap();
+
+        let workspace = Workspace::try_from(temp_dir.path().to_path_buf()).unwrap();
+        let config = Config::default();
+        let runtime = Box::new(DockerRuntime::new());
+        let driver = ContainerDriver::new(config, runtime);
+
+        // Test devcontainerId substitution
+        let mount_str = "type=volume,source=myvolume-${devcontainerId},target=/data";
+        let result = driver.substitute_mount_variables(mount_str, &workspace);
+        let devcontainer_id = driver.get_devcontainer_id(&workspace);
+        assert!(result.contains(&devcontainer_id));
+        assert!(!result.contains("${devcontainerId}"));
+
+        // Test localWorkspaceFolder substitution
+        let mount_str = "type=bind,source=${localWorkspaceFolder}/.config,target=/root/.config";
+        let result = driver.substitute_mount_variables(mount_str, &workspace);
+        assert!(result.contains(&workspace.path.to_string_lossy().to_string()));
+        assert!(!result.contains("${localWorkspaceFolder}"));
+
+        // Test containerWorkspaceFolder substitution
+        let workspace_name = workspace.path.file_name().unwrap().to_string_lossy();
+        let mount_str = "type=bind,source=/tmp,target=${containerWorkspaceFolder}/tmp";
+        let result = driver.substitute_mount_variables(mount_str, &workspace);
+        assert!(result.contains(&format!("/workspaces/{}", workspace_name)));
+        assert!(!result.contains("${containerWorkspaceFolder}"));
+
+        // Test multiple substitutions
+        let mount_str = "${localWorkspaceFolder}:/workspaces/${devcontainerId}";
+        let result = driver.substitute_mount_variables(mount_str, &workspace);
+        assert!(result.contains(&workspace.path.to_string_lossy().to_string()));
+        assert!(result.contains(&devcontainer_id));
+        assert!(!result.contains("${"));
     }
 }
