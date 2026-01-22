@@ -35,7 +35,7 @@ use std::{
     time::Duration,
 };
 
-use console::{Style, strip_ansi_codes};
+use console::Style;
 use indicatif::{ProgressBar, ProgressStyle};
 
 pub mod apple;
@@ -76,21 +76,14 @@ pub fn stream_build_output(mut child: Child) -> anyhow::Result<std::process::Exi
     bar.set_style(ProgressStyle::default_spinner().template("{spinner} {msg}")?);
     bar.enable_steady_tick(Duration::from_millis(100));
 
-    let bar_clone = bar.clone();
-
     // Stream stdout in a separate thread
     let stdout_thread = stdout.map(|stdout| {
         let rolling = Arc::clone(&rolling_buffer);
         let all = Arc::clone(&all_output);
-        let bar = bar_clone.clone();
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
             for line in reader.lines().map_while(Result::ok) {
-                // Print line permanently (with original ANSI codes)
-                bar.println(&line);
-
-                // Strip ANSI codes before adding to rolling buffer
-                let clean_line = strip_ansi_codes(&line).to_string();
+                let clean_line = strip_ansi_escapes::strip_str(&line);
 
                 // Add to rolling buffer
                 let mut roll = rolling.lock().unwrap();
@@ -114,20 +107,19 @@ pub fn stream_build_output(mut child: Child) -> anyhow::Result<std::process::Exi
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
             for line in reader.lines().map_while(Result::ok) {
-                // Strip ANSI codes before adding to rolling buffer
-                let clean_line = strip_ansi_codes(&line).to_string();
+                let clean_line = strip_ansi_escapes::strip_str(&line);
 
                 // Add to rolling buffer
                 let mut roll = rolling.lock().unwrap();
                 if roll.len() >= 10 {
                     roll.pop_front();
                 }
-                roll.push_back(clean_line);
+                roll.push_back(clean_line.clone());
                 drop(roll);
 
                 // Add to complete output
                 let mut all_buf = all.lock().unwrap();
-                all_buf.push(line);
+                all_buf.push(clean_line);
             }
         })
     });
