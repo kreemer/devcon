@@ -40,20 +40,17 @@ use tracing::{debug, error, info, warn};
 /// Manages active port forwarding sessions
 #[derive(Clone)]
 struct PortForwardManager {
-    /// Map of local_port -> (agent_stream, container_port, tunnel_id_counter)
-    forwards: Arc<Mutex<HashMap<u16, (Arc<Mutex<TcpStream>>, u16, Arc<AtomicU32>)>>>,
+    /// Map of local_port -> (agent_stream, container_port, tunnel_id_counter, data_port)
+    forwards: Arc<Mutex<HashMap<u16, (Arc<Mutex<TcpStream>>, u16, Arc<AtomicU32>, u16)>>>,
     /// Map of tunnel_id -> pending client stream
     pending_tunnels: Arc<Mutex<HashMap<u32, TcpStream>>>,
-    /// Control server port for tunnel connections
-    control_port: u16,
 }
 
 impl PortForwardManager {
-    fn new(control_port: u16) -> Self {
+    fn new() -> Self {
         Self {
             forwards: Arc::new(Mutex::new(HashMap::new())),
             pending_tunnels: Arc::new(Mutex::new(HashMap::new())),
-            control_port,
         }
     }
 
@@ -79,18 +76,74 @@ impl PortForwardManager {
             local_port, container_port
         );
 
+        // Create dedicated data listener on random port for this forward
+        let data_listener = TcpListener::bind("0.0.0.0:0")
+            .context("Failed to bind data listener on random port")?;
+        let data_port = data_listener.local_addr()?.port();
+
+        info!(
+            "Data listener for port {} started on 0.0.0.0:{}",
+            local_port, data_port
+        );
+
         // Store the forward mapping
         let tunnel_id_counter = Arc::new(AtomicU32::new(1));
         forwards.insert(
             local_port,
-            (stream.clone(), container_port, tunnel_id_counter.clone()),
+            (
+                stream.clone(),
+                container_port,
+                tunnel_id_counter.clone(),
+                data_port,
+            ),
         );
 
-        // Spawn thread to accept connections on this port
+        // Spawn dedicated data listener thread for this forward
+        let pending_tunnels_data = self.pending_tunnels.clone();
+        let forwards_clone_data = self.forwards.clone();
+        thread::spawn(move || {
+            for incoming_stream in data_listener.incoming() {
+                match incoming_stream {
+                    Ok(mut agent_stream) => {
+                        // Read tunnel_id from the stream
+                        let mut tunnel_id_buf = [0u8; 4];
+                        if let Err(e) = agent_stream.read_exact(&mut tunnel_id_buf) {
+                            error!("Failed to read tunnel_id from data connection: {}", e);
+                            continue;
+                        }
+                        let tunnel_id = u32::from_be_bytes(tunnel_id_buf);
+
+                        debug!(
+                            "Data listener received tunnel connection with tunnel_id={}",
+                            tunnel_id
+                        );
+
+                        let pending_clone = pending_tunnels_data.clone();
+                        thread::spawn(move || {
+                            if let Err(e) =
+                                handle_tunnel_connection(agent_stream, tunnel_id, pending_clone)
+                            {
+                                error!("Error handling tunnel connection: {}", e);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        error!("Error accepting data connection: {}", e);
+                        // Check if we should stop listening (forward was stopped)
+                        let forwards = forwards_clone_data.lock().unwrap();
+                        if !forwards.contains_key(&local_port) {
+                            break;
+                        }
+                    }
+                }
+            }
+            debug!("Data listener thread for port {} exiting", local_port);
+        });
+
+        // Spawn thread to accept connections on the forwarded port
         let stream_clone = stream.clone();
         let forwards_clone = self.forwards.clone();
         let pending_tunnels = self.pending_tunnels.clone();
-        let control_port = self.control_port;
 
         thread::spawn(move || {
             for incoming_stream in listener.incoming() {
@@ -100,18 +153,29 @@ impl PortForwardManager {
                         let tunnel_id = tunnel_id_counter.fetch_add(1, Ordering::SeqCst);
                         let pending_clone = pending_tunnels.clone();
 
-                        thread::spawn(move || {
-                            if let Err(e) = handle_forwarded_connection(
-                                client_stream,
-                                agent_stream,
-                                container_port,
-                                tunnel_id,
-                                pending_clone,
-                                control_port,
-                            ) {
-                                error!("Error handling forwarded connection: {}", e);
-                            }
-                        });
+                        // Get the data_port from the forwards map
+                        let data_port = {
+                            let forwards = forwards_clone.lock().unwrap();
+                            forwards.get(&local_port).map(|(_, _, _, dp)| *dp)
+                        };
+
+                        if let Some(data_port) = data_port {
+                            thread::spawn(move || {
+                                if let Err(e) = handle_forwarded_connection(
+                                    client_stream,
+                                    agent_stream,
+                                    container_port,
+                                    tunnel_id,
+                                    pending_clone,
+                                    data_port,
+                                ) {
+                                    error!("Error handling forwarded connection: {}", e);
+                                }
+                            });
+                        } else {
+                            error!("Forward for port {} no longer exists", local_port);
+                            break;
+                        }
                     }
                     Err(e) => {
                         error!("Error accepting connection: {}", e);
@@ -123,15 +187,13 @@ impl PortForwardManager {
                     }
                 }
             }
+            debug!(
+                "Forwarded port listener thread for port {} exiting",
+                local_port
+            );
         });
 
         Ok(())
-    }
-
-    /// Get and remove a pending tunnel client stream
-    fn take_pending_tunnel(&self, tunnel_id: u32) -> Option<TcpStream> {
-        let mut pending = self.pending_tunnels.lock().unwrap();
-        pending.remove(&tunnel_id)
     }
 
     /// Stop forwarding a port
@@ -155,7 +217,7 @@ fn handle_forwarded_connection(
     container_port: u16,
     tunnel_id: u32,
     pending_tunnels: Arc<Mutex<HashMap<u32, TcpStream>>>,
-    control_port: u16,
+    data_port: u16,
 ) -> Result<()> {
     debug!(
         "Handling forwarded connection to container port {}, tunnel_id={}",
@@ -178,6 +240,7 @@ fn handle_forwarded_connection(
         message: Some(ProtoMessage::TunnelRequest(devcon_proto::TunnelRequest {
             port: container_port as u32,
             tunnel_id,
+            data_port: data_port as u32,
         })),
     };
 
@@ -186,8 +249,8 @@ fn handle_forwarded_connection(
     drop(agent); // Release lock immediately
 
     debug!(
-        "Sent tunnel request to agent for port {}, tunnel_id={}, agent should connect back on port {}",
-        container_port, tunnel_id, control_port
+        "Sent tunnel request to agent for port {}, tunnel_id={}, agent should connect back on data port {}",
+        container_port, tunnel_id, data_port
     );
 
     // Wait up to 5 seconds for the tunnel to be established
@@ -278,64 +341,19 @@ fn read_message(stream: &mut TcpStream) -> Result<AgentMessage> {
     Ok(message)
 }
 
-/// Handle incoming connection - determine if it's a control connection or tunnel connection
-fn handle_connection(mut stream: TcpStream, manager: PortForwardManager) -> Result<()> {
-    let peer_addr = stream.peer_addr()?;
-
-    // Peek at first 4 bytes to determine connection type
-    let mut peek_buf = [0u8; 4];
-    match stream.peek(&mut peek_buf) {
-        Ok(n) if n == 4 => {
-            let first_u32 = u32::from_be_bytes(peek_buf);
-            const TUNNEL_MAGIC: u32 = 0x54554E4E; // ASCII "TUNN"
-
-            debug!(
-                "Connection from {}, first 4 bytes: 0x{:08x}",
-                peer_addr, first_u32
-            );
-
-            // Check for tunnel magic prefix
-            if first_u32 == TUNNEL_MAGIC {
-                // This is a tunnel connection
-                stream.read_exact(&mut peek_buf)?; // Consume the magic bytes
-
-                // Read the tunnel_id
-                let mut tunnel_id_buf = [0u8; 4];
-                stream.read_exact(&mut tunnel_id_buf)?;
-                let tunnel_id = u32::from_be_bytes(tunnel_id_buf);
-
-                debug!(
-                    "Detected tunnel connection from {} with tunnel_id={}",
-                    peer_addr, tunnel_id
-                );
-                handle_tunnel_connection(stream, tunnel_id, manager)
-            } else {
-                // This is a control connection (protobuf message length)
-                debug!("Detected control connection from {}", peer_addr);
-                handle_agent_connection(stream, manager)
-            }
-        }
-        _ => {
-            // Can't peek, assume control connection
-            debug!(
-                "Cannot peek connection from {}, assuming control connection",
-                peer_addr
-            );
-            handle_agent_connection(stream, manager)
-        }
-    }
-}
-
-/// Handle a tunnel connection from agent
+/// Handle a tunnel connection from agent (called by data listener)
 fn handle_tunnel_connection(
     agent_stream: TcpStream,
     tunnel_id: u32,
-    manager: PortForwardManager,
+    pending_tunnels: Arc<Mutex<HashMap<u32, TcpStream>>>,
 ) -> Result<()> {
     debug!("Handling tunnel connection for tunnel_id={}", tunnel_id);
 
     // Get the pending client stream for this tunnel_id
-    let client_stream = manager.take_pending_tunnel(tunnel_id);
+    let client_stream = {
+        let mut pending = pending_tunnels.lock().unwrap();
+        pending.remove(&tunnel_id)
+    };
 
     if client_stream.is_none() {
         warn!("No pending client found for tunnel_id={}", tunnel_id);
@@ -440,14 +458,14 @@ pub fn start_control_server(port: u16) -> Result<()> {
 
     info!("Control server listening on 0.0.0.0:{}", port);
 
-    let manager = PortForwardManager::new(port);
+    let manager = PortForwardManager::new();
 
     for stream in listener.incoming() {
         match stream {
             Ok(stream) => {
                 let manager_clone = manager.clone();
                 thread::spawn(move || {
-                    if let Err(e) = handle_connection(stream, manager_clone) {
+                    if let Err(e) = handle_agent_connection(stream, manager_clone) {
                         error!("Error handling connection: {}", e);
                     }
                 });
