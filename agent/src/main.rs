@@ -91,30 +91,26 @@ fn connect_to_control_server(host: &str, port: u16) -> io::Result<TcpStream> {
     TcpStream::connect(addr)
 }
 
-/// Handle tunnel request - open NEW connection to control server and proxy data
+/// Handle tunnel request - open NEW connection to data port and proxy data
 fn handle_tunnel_request(
     host: &str,
-    control_port: u16,
+    data_port: u16,
     service_port: u16,
     tunnel_id: u32,
 ) -> io::Result<()> {
     eprintln!(
         "Tunnel request received: tunnel_id={}, service_port={}, connecting to {}:{}",
-        tunnel_id, service_port, host, control_port
+        tunnel_id, service_port, host, data_port
     );
 
-    // Open NEW connection to control server for this tunnel
-    let mut tunnel_stream = TcpStream::connect(format!("{}:{}", host, control_port))?;
-    eprintln!("Opened new tunnel connection to control server");
+    // Open NEW connection to data port for this tunnel
+    let mut tunnel_stream = TcpStream::connect(format!("{}:{}", host, data_port))?;
+    eprintln!("Opened new tunnel connection to data port {}", data_port);
 
-    // Send magic prefix to identify this as a tunnel connection
-    const TUNNEL_MAGIC: u32 = 0x54554E4E; // ASCII "TUNN"
-    tunnel_stream.write_all(&TUNNEL_MAGIC.to_be_bytes())?;
-
-    // Send tunnel_id
+    // Send tunnel_id (no magic bytes needed)
     tunnel_stream.write_all(&tunnel_id.to_be_bytes())?;
     tunnel_stream.flush()?;
-    eprintln!("Sent tunnel_id {} to control server", tunnel_id);
+    eprintln!("Sent tunnel_id {} to data port", tunnel_id);
 
     // Connect to the local service in the container
     let local_addr = format!("127.0.0.1:{}", service_port);
@@ -160,12 +156,7 @@ fn handle_tunnel_request(
 }
 
 /// Run port forward daemon for a specific port
-fn run_port_forward_daemon(
-    stream: &mut TcpStream,
-    port: u16,
-    host: &str,
-    control_port: u16,
-) -> io::Result<()> {
+fn run_port_forward_daemon(stream: &mut TcpStream, port: u16, host: &str) -> io::Result<()> {
     eprintln!("Port forward daemon running for port {}", port);
 
     // Keep the connection alive and handle tunnel requests
@@ -176,16 +167,17 @@ fn run_port_forward_daemon(
                     Some(agent_message::Message::TunnelRequest(req)) => {
                         let service_port = req.port as u16;
                         let tunnel_id = req.tunnel_id;
+                        let data_port = req.data_port as u16;
                         eprintln!(
-                            "Received tunnel request: tunnel_id={}, service_port={}",
-                            tunnel_id, service_port
+                            "Received tunnel request: tunnel_id={}, service_port={}, data_port={}",
+                            tunnel_id, service_port, data_port
                         );
 
                         // Spawn new thread to handle this tunnel
                         let host = host.to_string();
                         std::thread::spawn(move || {
                             if let Err(e) =
-                                handle_tunnel_request(&host, control_port, service_port, tunnel_id)
+                                handle_tunnel_request(&host, data_port, service_port, tunnel_id)
                             {
                                 eprintln!("Error handling tunnel: {}", e);
                             }
@@ -225,16 +217,17 @@ fn run_daemon(host: &str, port: u16) -> io::Result<()> {
                     Some(agent_message::Message::TunnelRequest(req)) => {
                         let service_port = req.port as u16;
                         let tunnel_id = req.tunnel_id;
+                        let data_port = req.data_port as u16;
                         eprintln!(
-                            "Received tunnel request: tunnel_id={}, service_port={}",
-                            tunnel_id, service_port
+                            "Received tunnel request: tunnel_id={}, service_port={}, data_port={}",
+                            tunnel_id, service_port, data_port
                         );
 
                         // Spawn new thread to handle this tunnel
                         let host = host.to_string();
                         std::thread::spawn(move || {
                             if let Err(e) =
-                                handle_tunnel_request(&host, port, service_port, tunnel_id)
+                                handle_tunnel_request(&host, data_port, service_port, tunnel_id)
                             {
                                 eprintln!("Error handling tunnel: {}", e);
                             }
@@ -276,12 +269,7 @@ fn main() {
                         Ok(_) => {
                             eprintln!("Port forward request sent, keeping connection alive...");
                             // Keep connection alive and handle any reverse tunnel requests
-                            run_port_forward_daemon(
-                                &mut stream,
-                                port,
-                                &cli.control_host,
-                                cli.control_port,
-                            )
+                            run_port_forward_daemon(&mut stream, port, &cli.control_host)
                         }
                         Err(e) => Err(e),
                     }

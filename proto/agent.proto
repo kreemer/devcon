@@ -21,6 +21,7 @@ message OpenUrl {
 message TunnelRequest {
   uint32 port = 1;
   uint32 tunnel_id = 2;
+  uint32 data_port = 3;
 }
 
 // Wrapper message for all agent communication
