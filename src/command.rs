@@ -258,6 +258,74 @@ pub fn handle_shell_command(path: PathBuf, _env: &[String]) -> anyhow::Result<()
     Ok(())
 }
 
+/// Handles the up command for building and starting a development container.
+///
+/// This function:
+/// 1. Loads the user configuration from XDG directories
+/// 2. Loads the devcontainer configuration from the specified path
+/// 3. Processes features once (avoiding redundant processing)
+/// 4. Builds the container image with all configured features
+/// 5. Starts the container with the project mounted as a volume
+///
+/// This is more efficient than running build then start separately, as it
+/// processes features only once.
+///
+/// # Arguments
+///
+/// * `path` - The path to the project directory containing `.devcontainer/devcontainer.json`
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The devcontainer configuration cannot be found or parsed
+/// - Feature processing fails
+/// - The container build process fails
+/// - The container fails to start
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::PathBuf;
+/// # use devcon::command::handle_up_command;
+///
+/// let project_path = PathBuf::from("/path/to/project");
+/// handle_up_command(project_path)?;
+/// # Ok::<(), anyhow::Error>(())
+/// ```
+pub fn handle_up_command(path: PathBuf) -> anyhow::Result<()> {
+    let config = Config::load()?;
+    trace!("Config loaded {:?}", config);
+    let devcontainer_workspace = Workspace::try_from(path)?;
+
+    // Create runtime based on config
+    let runtime_name = config.resolve_runtime()?;
+    debug!("Using runtime {:?}", runtime_name);
+    let runtime: Box<dyn crate::driver::runtime::ContainerRuntime> = match runtime_name.as_str() {
+        "docker" => Box::new(DockerRuntime::new()),
+        "apple" => Box::new(AppleRuntime::new()),
+        _ => anyhow::bail!("Unknown runtime: {}", runtime_name),
+    };
+
+    let driver = ContainerDriver::new(config, runtime);
+
+    // Process features once
+    let (processed_features, _) = driver.prepare_features(&devcontainer_workspace)?;
+
+    // Build with pre-processed features
+    driver.build_with_features(
+        devcontainer_workspace.clone(),
+        &[],
+        Some(processed_features.clone()),
+    )?;
+
+    // Start the container with pre-processed features
+    driver.start_with_features(devcontainer_workspace, &[], Some(processed_features))?;
+
+    println!("Container built and started. Agent listener running. Press Ctrl+C to stop.");
+
+    Ok(())
+}
+
 /// Handles the serve command to start the control server.
 ///
 /// This function starts a TCP server that listens for connections from

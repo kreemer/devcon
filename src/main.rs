@@ -75,6 +75,16 @@ enum Commands {
         )]
         path: Option<PathBuf>,
     },
+    /// Builds and starts a development container for the specified path
+    #[command(about = "Build and start a development container (combines build + start)")]
+    Up {
+        /// Path to the project directory containing .devcontainer configuration
+        #[arg(
+            help = "Path to the project directory. If not provided, uses current directory.",
+            value_name = "PATH"
+        )]
+        path: Option<PathBuf>,
+    },
     /// Execs a shell in a development container for the specified path
     #[command(about = "Exec a shell in a development container with the devcontainer CLI")]
     Shell {
@@ -152,6 +162,9 @@ fn main() -> anyhow::Result<()> {
         }
         Commands::Start { path } => {
             handle_start_command(path.clone().unwrap_or(PathBuf::from(".").to_path_buf()))?;
+        }
+        Commands::Up { path } => {
+            handle_up_command(path.clone().unwrap_or(PathBuf::from(".").to_path_buf()))?;
         }
         Commands::Shell { path, env } => {
             handle_shell_command(
