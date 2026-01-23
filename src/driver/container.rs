@@ -143,58 +143,34 @@ impl ContainerDriver {
         Self { config, runtime }
     }
 
-    /// Builds a container image from the devcontainer configuration.
+    /// Prepares features for building or starting a container.
     ///
     /// This method:
-    /// 1. Creates a temporary directory for the build context
-    /// 2. Downloads and extracts all configured features
-    /// 3. Generates a Dockerfile with feature installations and dotfiles setup
-    /// 4. Builds the container image using the `container` CLI tool
-    ///
-    /// The resulting image is tagged as `devcon-{container_name}`.
+    /// 1. Merges additional features from config
+    /// 2. Adds agent installation feature (if not disabled)
+    /// 3. Downloads and processes all features (including dependencies)
+    /// 4. Applies override feature install order if specified
     ///
     /// # Arguments
     ///
-    /// * `dotfiles_repo` - Optional URL to a dotfiles repository to clone
-    /// * `env_variables` - Environment variables to set in the container
+    /// * `devcontainer_workspace` - The workspace with devcontainer configuration
+    ///
+    /// # Returns
+    ///
+    /// Returns a tuple of (processed_features, merged_features) where:
+    /// - `processed_features` - Features processed with dependencies resolved
+    /// - `merged_features` - The initial merged feature list
     ///
     /// # Errors
     ///
     /// Returns an error if:
+    /// - Feature merging fails
+    /// - Agent generation fails
     /// - Feature processing fails
-    /// - Dockerfile generation fails
-    /// - Container build command fails
-    ///
-    /// # Examples
-    ///
-    /// ```no_run
-    /// # use devcon::devcontainer::Devcontainer;
-    /// # use devcon::driver::container::ContainerDriver;
-    /// # use std::path::PathBuf;
-    /// # fn example() -> anyhow::Result<()> {
-    /// let config = Devcontainer::try_from(PathBuf::from("/project"))?;
-    /// let driver = ContainerDriver::new(&config);
-    /// driver.build(Some("https://github.com/user/dotfiles"), &["EDITOR=vim".to_string()])?;
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn build(
+    pub fn prepare_features(
         &self,
-        devcontainer_workspace: Workspace,
-        env_variables: &[String],
-    ) -> anyhow::Result<()> {
-        let directory = TempDir::new()?;
-        let directory_path = directory.keep();
-        info!(
-            "Building container in temporary directory: {}",
-            directory_path.to_string_lossy()
-        );
-
-        trace!(
-            "Processing features for devcontainer at {:?}",
-            devcontainer_workspace.path
-        );
-
+        devcontainer_workspace: &Workspace,
+    ) -> anyhow::Result<(Vec<FeatureProcessResult>, Vec<FeatureRef>)> {
         trace!(
             "Using features of devcontainer: {:?}",
             devcontainer_workspace.devcontainer.features
@@ -245,6 +221,99 @@ impl ContainerDriver {
                 .map(|f| &f.feature.id)
                 .collect::<Vec<_>>()
         );
+
+        Ok((processed_features, features))
+    }
+
+    /// Builds a container image with features installed.
+    ///
+    /// This method:
+    /// 1. Creates a temporary directory for the build context
+    /// 2. Downloads and processes all features (including dependencies)
+    /// 3. Generates a multi-stage Dockerfile with feature installations
+    /// 4. Builds the image using the runtime's build command
+    ///
+    /// The Dockerfile uses multi-stage builds where each feature gets its own
+    /// layer, allowing for efficient caching and rebuild optimization.
+    ///
+    /// # Arguments
+    ///
+    /// * `devcontainer_workspace` - The workspace with devcontainer configuration
+    /// * `env_variables` - Environment variables to set in the container
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The temporary directory cannot be created
+    /// - Feature processing fails
+    /// - The Dockerfile cannot be generated
+    /// - The container build process fails
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use devcon::devcontainer::Devcontainer;
+    /// # use devcon::driver::container::ContainerDriver;
+    /// # use std::path::PathBuf;
+    /// # fn example() -> anyhow::Result<()> {
+    /// let config = Devcontainer::try_from(PathBuf::from("/project"))?;
+    /// let driver = ContainerDriver::new(&config);
+    /// driver.build(&[\"NODE_ENV=production\"])?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn build(
+        &self,
+        devcontainer_workspace: Workspace,
+        env_variables: &[String],
+    ) -> anyhow::Result<()> {
+        self.build_with_features(devcontainer_workspace, env_variables, None)
+    }
+
+    /// Builds a container image with optional pre-processed features.
+    ///
+    /// This is the internal implementation that allows reusing already-processed
+    /// features to avoid redundant processing.
+    ///
+    /// # Arguments
+    ///
+    /// * `devcontainer_workspace` - The workspace with devcontainer configuration
+    /// * `env_variables` - Environment variables to set in the container
+    /// * `processed_features` - Optional pre-processed features to use
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The temporary directory cannot be created
+    /// - Feature processing fails (if features not provided)
+    /// - The Dockerfile cannot be generated
+    /// - The container build process fails
+    pub fn build_with_features(
+        &self,
+        devcontainer_workspace: Workspace,
+        env_variables: &[String],
+        processed_features: Option<Vec<FeatureProcessResult>>,
+    ) -> anyhow::Result<()> {
+        let directory = TempDir::new()?;
+        let directory_path = directory.keep();
+        info!(
+            "Building container in temporary directory: {}",
+            directory_path.to_string_lossy()
+        );
+
+        trace!(
+            "Processing features for devcontainer at {:?}",
+            devcontainer_workspace.path
+        );
+
+        // Use provided features or process them
+        let processed_features = match processed_features {
+            Some(features) => features,
+            None => {
+                let (features, _) = self.prepare_features(&devcontainer_workspace)?;
+                features
+            }
+        };
 
         let mut feature_install = String::new();
 
@@ -474,7 +543,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
     ///
     /// # Arguments
     ///
-    /// * `path` - The path to the project directory to mount as a volume
+    /// * `devcontainer_workspace` - The workspace with devcontainer configuration
     /// * `env_variables` - Additional environment variables to pass to the container
     ///
     /// # Errors
@@ -505,6 +574,32 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         devcontainer_workspace: Workspace,
         env_variables: &[String],
     ) -> anyhow::Result<()> {
+        self.start_with_features(devcontainer_workspace, env_variables, None)
+    }
+
+    /// Starts a container from a built image with optional pre-processed features.
+    ///
+    /// This is the internal implementation that allows reusing already-processed
+    /// features to avoid redundant processing.
+    ///
+    /// # Arguments
+    ///
+    /// * `devcontainer_workspace` - The workspace with devcontainer configuration
+    /// * `env_variables` - Additional environment variables to pass to the container
+    /// * `processed_features` - Optional pre-processed features to use
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The container image doesn't exist (must run `build()` first)
+    /// - Feature processing fails (if features not provided)
+    /// - The container CLI command fails
+    pub fn start_with_features(
+        &self,
+        devcontainer_workspace: Workspace,
+        env_variables: &[String],
+        processed_features: Option<Vec<FeatureProcessResult>>,
+    ) -> anyhow::Result<()> {
         let handles = self.runtime.list()?;
         let existing_handle = handles
             .iter()
@@ -521,7 +616,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         });
 
         if !already_built {
-            self.build(devcontainer_workspace.clone(), &[])?;
+            bail!("Image not found. Run 'devcon build' or 'devcon up' first.");
         }
 
         let volume_mount = format!(
@@ -564,17 +659,14 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             }
         }
 
-        // Process features to get their mounts
-        let mut features = devcontainer_workspace
-            .devcontainer
-            .merge_additional_features(&self.config.additional_features)?;
-
-        // Add agent installation feature
-        let agent_path = agent::Agent::new(AgentConfig::default()).generate()?;
-        features.push(FeatureRef::new(FeatureSource::Local { path: agent_path }));
-
-        // Extract mounts from features (we need to process them but won't use the full results here)
-        let processed_features = process_features(&features)?;
+        // Use provided features or process them
+        let processed_features = match processed_features {
+            Some(features) => features,
+            None => {
+                let (features, _) = self.prepare_features(&devcontainer_workspace)?;
+                features
+            }
+        };
         for feature_result in &processed_features {
             if let Some(ref mounts) = feature_result.feature.mounts {
                 // Convert feature::FeatureMount to devcontainer::Mount with variable substitution
@@ -774,28 +866,6 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
     /// # }
     /// ```
     pub fn shell(&self, devcontainer_workspace: Workspace) -> anyhow::Result<()> {
-        let handles = self.runtime.list()?;
-        let handle = handles
-            .iter()
-            .find(|(name, _)| name == &self.get_container_name(&devcontainer_workspace));
-
-        if handle.is_none() {
-            println!(
-                "No running container found for project {}, starting one...",
-                devcontainer_workspace
-                    .path
-                    .file_name()
-                    .unwrap()
-                    .to_string_lossy()
-            );
-            self.start(devcontainer_workspace.clone(), &[])?;
-        }
-
-        let name = devcontainer_workspace
-            .path
-            .file_name()
-            .unwrap()
-            .to_string_lossy();
         let containers = self.runtime.list()?;
 
         let handle = containers
@@ -806,7 +876,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             .map(|(_, id)| id);
 
         if handle.is_none() {
-            bail!("No running container found for project {}", name);
+            bail!("Container not running. Run 'devcon start' or 'devcon up' first.");
         }
 
         // Process environment variables
