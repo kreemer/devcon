@@ -484,15 +484,19 @@ fn get_feature_cache_dir() -> anyhow::Result<std::path::PathBuf> {
     Ok(devcon_cache)
 }
 
-/// Get the versioned cache path for a specific feature
-fn get_cached_feature_path(registry: &FeatureRegistry) -> anyhow::Result<std::path::PathBuf> {
+/// Get the versioned cache path for a specific feature based on layer SHA
+fn get_cached_feature_path(
+    registry: &FeatureRegistry,
+    layer_sha: &str,
+) -> anyhow::Result<std::path::PathBuf> {
     let cache_dir = get_feature_cache_dir()?;
-    // Create path: cache/owner/repository/name/version
+    // Create path: cache/owner/repository/name/sha
+    // Using SHA ensures automatic invalidation when content changes
     let feature_cache = cache_dir
         .join(&registry.owner)
         .join(&registry.repository)
         .join(&registry.name)
-        .join(&registry.version);
+        .join(layer_sha);
     Ok(feature_cache)
 }
 
@@ -504,36 +508,42 @@ fn local_feature(path: &PathBuf) -> anyhow::Result<PathBuf> {
 
 /// Download a feature from registry to cache, or use cached version if available
 fn download_feature<'a>(registry: &'a FeatureRegistry) -> anyhow::Result<PathBuf> {
-    let cached_feature_path = get_cached_feature_path(registry)?;
+    // First, fetch the manifest to get the layer SHA
+    let (token, layer_digest) = fetch_manifest_and_layer_digest(registry)?;
+
+    // Extract SHA from digest (format: "sha256:abc123...")
+    let layer_sha = layer_digest
+        .strip_prefix("sha256:")
+        .unwrap_or(&layer_digest)
+        .chars()
+        .take(12) // Use first 12 chars of SHA for shorter paths
+        .collect::<String>();
+
+    let cached_feature_path = get_cached_feature_path(registry, &layer_sha)?;
 
     // Check if feature is already cached
     if !cached_feature_path.exists()
         || !cached_feature_path
-            .join("devcontainer-features.json")
+            .join("devcontainer-feature.json")
             .exists()
     {
         info!(
-            "Downloading feature: {} (version {})",
-            registry.name, registry.version
+            "Downloading feature: {} (version {}, SHA: {})",
+            registry.name, registry.version, layer_sha
         );
-        download_and_cache_feature(registry, &cached_feature_path)?;
+        download_and_cache_feature(registry, &cached_feature_path, &token, &layer_digest)?;
     } else {
         info!(
-            "Using cached feature: {} (version {})",
-            registry.name, registry.version
+            "Using cached feature: {} (version {}, SHA: {})",
+            registry.name, registry.version, layer_sha
         );
     }
 
     Ok(cached_feature_path)
 }
 
-/// Download and extract a feature to the cache directory
-fn download_and_cache_feature(
-    registry: &FeatureRegistry,
-    cache_path: &std::path::Path,
-) -> anyhow::Result<()> {
-    let temp_directory = TempDir::new()?;
-
+/// Fetch the manifest and extract the layer digest (SHA)
+fn fetch_manifest_and_layer_digest(registry: &FeatureRegistry) -> anyhow::Result<(String, String)> {
     let token_url = format!(
         "https://{}/token?scope=repository:{}/{}:pull",
         "ghcr.io", registry.owner, registry.repository
@@ -541,12 +551,15 @@ fn download_and_cache_feature(
 
     let response = reqwest::blocking::get(&token_url)?;
     if !response.status().is_success() {
-        bail!("Failed to download feature: {}", registry.name);
+        bail!("Failed to get token for feature: {}", registry.name);
     }
     let json: serde_json::Value = response.json()?;
-    let token = json["token"].as_str().ok_or_else(|| {
-        anyhow::anyhow!("Token not found in response for feature: {}", registry.name)
-    })?;
+    let token = json["token"]
+        .as_str()
+        .ok_or_else(|| {
+            anyhow::anyhow!("Token not found in response for feature: {}", registry.name)
+        })?
+        .to_string();
 
     let manifest_url = format!(
         "https://{}/v2/{}/{}/{}/manifests/{}",
@@ -555,7 +568,7 @@ fn download_and_cache_feature(
 
     let manifest_response = reqwest::blocking::Client::new()
         .get(&manifest_url)
-        .bearer_auth(token)
+        .bearer_auth(&token)
         .header("Accept", "application/vnd.oci.image.manifest.v1+json")
         .send()?;
 
@@ -570,13 +583,21 @@ fn download_and_cache_feature(
         anyhow::anyhow!("No layers found in manifest for feature: {}", registry.name)
     })?;
 
+    Ok((token, layer.digest().to_string()))
+}
+
+/// Download and extract a feature to the cache directory
+fn download_and_cache_feature(
+    registry: &FeatureRegistry,
+    cache_path: &std::path::Path,
+    token: &str,
+    layer_digest: &str,
+) -> anyhow::Result<()> {
+    let temp_directory = TempDir::new()?;
+
     let layer_url = format!(
         "https://{}/v2/{}/{}/{}/blobs/{}",
-        "ghcr.io",
-        registry.owner,
-        registry.repository,
-        registry.name,
-        layer.digest()
+        "ghcr.io", registry.owner, registry.repository, registry.name, layer_digest
     );
     let layer_response = reqwest::blocking::Client::new()
         .get(&layer_url)
@@ -587,6 +608,24 @@ fn download_and_cache_feature(
         bail!("Failed to download layer for feature: {}", registry.name);
     }
     let layer_bytes = layer_response.bytes()?;
+
+    // Re-fetch manifest to get media type (we only got the digest earlier)
+    let manifest_url = format!(
+        "https://{}/v2/{}/{}/{}/manifests/{}",
+        "ghcr.io", registry.owner, registry.repository, registry.name, registry.version
+    );
+    let manifest_response = reqwest::blocking::Client::new()
+        .get(&manifest_url)
+        .bearer_auth(token)
+        .header("Accept", "application/vnd.oci.image.manifest.v1+json")
+        .send()?;
+    let manifest_json: serde_json::Value = manifest_response.json()?;
+    let manifest_str = serde_json::to_string(&manifest_json)?;
+    let reader = std::io::Cursor::new(manifest_str);
+    let manifest = oci_spec::image::ImageManifest::from_reader(reader)?;
+    let layer = manifest.layers().first().ok_or_else(|| {
+        anyhow::anyhow!("No layers found in manifest for feature: {}", registry.name)
+    })?;
 
     let extract_path = match layer.media_type() {
         oci_spec::image::MediaType::Other(str) => match str.as_str() {
@@ -663,6 +702,38 @@ fn download_and_cache_feature(
     fs_extra::dir::copy(&extract_path, cache_path, &options)
         .map_err(|e| anyhow::anyhow!("Failed to copy extracted feature: {}", e))?;
 
+    Ok(())
+}
+
+/// Clear the entire feature cache
+pub fn clear_feature_cache() -> anyhow::Result<()> {
+    let cache_dir = get_feature_cache_dir()?;
+    if cache_dir.exists() {
+        info!("Clearing feature cache at: {}", cache_dir.display());
+        fs::remove_dir_all(&cache_dir)?;
+        fs::create_dir_all(&cache_dir)?;
+        println!("Feature cache cleared successfully");
+    } else {
+        println!("Feature cache is already empty");
+    }
+    Ok(())
+}
+
+/// Clear cache for a specific feature
+pub fn clear_feature_cache_for(owner: &str, repository: &str, name: &str) -> anyhow::Result<()> {
+    let cache_dir = get_feature_cache_dir()?;
+    let feature_cache = cache_dir.join(owner).join(repository).join(name);
+
+    if feature_cache.exists() {
+        info!(
+            "Clearing cache for feature: {}/{}/{}",
+            owner, repository, name
+        );
+        fs::remove_dir_all(&feature_cache)?;
+        println!("Cache cleared for {}/{}/{}", owner, repository, name);
+    } else {
+        println!("No cache found for {}/{}/{}", owner, repository, name);
+    }
     Ok(())
 }
 
