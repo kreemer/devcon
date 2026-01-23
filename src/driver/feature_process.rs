@@ -498,6 +498,7 @@ fn get_cached_feature_path(registry: &FeatureRegistry) -> anyhow::Result<std::pa
 
 /// Get local feature path
 fn local_feature(path: &PathBuf) -> anyhow::Result<PathBuf> {
+    info!("Using local feature from path: {}", path.display());
     path.canonicalize().map_err(|e| anyhow::anyhow!(e))
 }
 

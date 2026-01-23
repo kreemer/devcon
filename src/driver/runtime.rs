@@ -82,8 +82,16 @@ pub fn stream_build_output(mut child: Child) -> anyhow::Result<std::process::Exi
         let all = Arc::clone(&all_output);
         std::thread::spawn(move || {
             let reader = BufReader::new(stdout);
-            for line in reader.lines().map_while(Result::ok) {
-                let clean_line = strip_ansi_escapes::strip_str(&line);
+            for line_result in reader.lines() {
+                // Handle UTF-8 decoding errors gracefully
+                let line = match line_result {
+                    Ok(l) => l,
+                    Err(_) => continue, // Skip lines with UTF-8 errors
+                };
+
+                // Try to strip ANSI escapes safely, fall back to original if it fails
+                let clean_line = std::panic::catch_unwind(|| strip_ansi_escapes::strip_str(&line))
+                    .unwrap_or_else(|_| line.clone());
 
                 // Add to rolling buffer
                 let mut roll = rolling.lock().unwrap();
@@ -106,20 +114,28 @@ pub fn stream_build_output(mut child: Child) -> anyhow::Result<std::process::Exi
         let all = Arc::clone(&all_output_clone);
         std::thread::spawn(move || {
             let reader = BufReader::new(stderr);
-            for line in reader.lines().map_while(Result::ok) {
-                let clean_line = strip_ansi_escapes::strip_str(&line);
+            for line_result in reader.lines() {
+                // Handle UTF-8 decoding errors gracefully
+                let line = match line_result {
+                    Ok(l) => l,
+                    Err(_) => continue, // Skip lines with UTF-8 errors
+                };
+
+                // Try to strip ANSI escapes safely, fall back to original if it fails
+                let clean_line = std::panic::catch_unwind(|| strip_ansi_escapes::strip_str(&line))
+                    .unwrap_or_else(|_| line.clone());
 
                 // Add to rolling buffer
                 let mut roll = rolling.lock().unwrap();
                 if roll.len() >= 10 {
                     roll.pop_front();
                 }
-                roll.push_back(clean_line.clone());
+                roll.push_back(clean_line);
                 drop(roll);
 
-                // Add to complete output
+                // Add to complete output (with original ANSI codes)
                 let mut all_buf = all.lock().unwrap();
-                all_buf.push(clean_line);
+                all_buf.push(line);
             }
         })
     });
