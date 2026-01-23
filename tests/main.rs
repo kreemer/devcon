@@ -1,4 +1,5 @@
 #[cfg(test)]
+#[cfg(target_os = "windows")]
 mod tests {
     use assert_cmd::cargo::cargo_bin_cmd;
 

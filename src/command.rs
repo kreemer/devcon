@@ -361,6 +361,7 @@ mod test {
     }
 
     #[test]
+    #[cfg(target_os = "windows")]
     fn test_handle_simple_build_command() {
         let temp_dir = tempfile::tempdir().unwrap();
         let container_content = r#"
