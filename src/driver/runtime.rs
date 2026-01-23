@@ -225,6 +225,7 @@ pub trait ContainerRuntime: Send {
         label: &str,
         env_vars: &[String],
         additional_mounts: &[crate::devcontainer::Mount],
+        requires_privileged: bool,
     ) -> anyhow::Result<Box<dyn ContainerHandle>>;
 
     /// Executes a command in a running container.

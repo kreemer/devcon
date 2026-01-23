@@ -88,6 +88,7 @@ impl ContainerRuntime for DockerRuntime {
         label: &str,
         env_vars: &[String],
         additional_mounts: &[crate::devcontainer::Mount],
+        requires_privileged: bool,
     ) -> anyhow::Result<Box<dyn super::ContainerHandle>> {
         trace!("Running Docker container with image: {}", image_tag);
         let mut cmd = Command::new("docker");
@@ -98,6 +99,11 @@ impl ContainerRuntime for DockerRuntime {
             .arg(volume_mount)
             .arg("--label")
             .arg(label);
+
+        // Add privileged flag if required
+        if requires_privileged {
+            cmd.arg("--privileged");
+        }
 
         // Add environment variables
         for env_var in env_vars {

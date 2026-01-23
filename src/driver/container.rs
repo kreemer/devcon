@@ -612,6 +612,11 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             }
         }
 
+        // Check if container needs to run in privileged mode
+        let requires_privileged = processed_features
+            .iter()
+            .any(|f| f.feature.privileged.unwrap_or(false));
+
         // Process environment variables
         let mut processed_env_vars = Vec::new();
 
@@ -631,6 +636,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             &label,
             &processed_env_vars,
             &all_mounts,
+            requires_privileged,
         )?;
 
         match &devcontainer_workspace.devcontainer.on_create_command {
@@ -692,6 +698,26 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             })?,
             None => { /* No onCreateCommand specified */ }
         };
+
+        // Check if feature has entrypoint script which should start now
+        processed_features
+            .iter()
+            .try_for_each(|feature_result| -> anyhow::Result<()> {
+                if let Some(entrypoint) = &feature_result.feature.entrypoint {
+                    info!(
+                        "Executing entrypoint script for feature '{}'",
+                        feature_result.feature.id
+                    );
+                    let wrapped_cmd =
+                        self.wrap_lifecycle_command(&devcontainer_workspace, entrypoint);
+                    self.runtime.exec(
+                        handle.as_ref(),
+                        vec!["bash", "-c", "-i", &wrapped_cmd],
+                        &[],
+                    )?;
+                }
+                Ok(())
+            })?;
 
         match &devcontainer_workspace.devcontainer.post_start_command {
             Some(LifecycleCommand::String(cmd)) => {
