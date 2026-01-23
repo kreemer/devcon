@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use minijinja::Environment;
 use serde::{Deserialize, Serialize};
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 /// Configuration for generating a devcontainer feature
@@ -138,7 +138,7 @@ impl Agent {
     }
 
     /// Generate the devcontainer-feature.json file
-    fn generate_feature_json(&self, feature_dir: &PathBuf) -> Result<()> {
+    fn generate_feature_json(&self, feature_dir: &Path) -> Result<()> {
         let mut feature_json = serde_json::json!({
             "id": self.config.id,
             "version": self.config.version,
@@ -172,7 +172,7 @@ impl Agent {
     }
 
     /// Generate the install.sh script
-    fn generate_install_script(&self, feature_dir: &PathBuf) -> Result<()> {
+    fn generate_install_script(&self, feature_dir: &Path) -> Result<()> {
         let install_path = feature_dir.join("install.sh");
         std::fs::write(&install_path, &self.config.install_script)
             .context("Failed to write install.sh")?;

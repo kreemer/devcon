@@ -61,8 +61,7 @@ enum Commands {
 /// Send a protobuf message over a TCP stream with length prefix
 fn send_message(stream: &mut TcpStream, msg: &AgentMessage) -> io::Result<()> {
     let mut buf = Vec::new();
-    msg.encode(&mut buf)
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+    msg.encode(&mut buf).map_err(io::Error::other)?;
 
     let len = buf.len() as u32;
     stream.write_all(&len.to_be_bytes())?;
@@ -81,7 +80,7 @@ fn read_message(stream: &mut TcpStream) -> io::Result<AgentMessage> {
     let mut buf = vec![0u8; len];
     stream.read_exact(&mut buf)?;
 
-    AgentMessage::decode(&buf[..]).map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    AgentMessage::decode(&buf[..]).map_err(io::Error::other)
 }
 
 /// Connect to the control server
