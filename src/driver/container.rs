@@ -53,7 +53,7 @@
 //! ```
 
 use std::fs::{self, File};
-use std::path::PathBuf;
+use std::path::Path;
 
 use anyhow::bail;
 use minijinja::Environment;
@@ -472,9 +472,9 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
     fn copy_feature_to_build(
         &self,
         process: &FeatureProcessResult,
-        build_directory: &PathBuf,
+        build_directory: &Path,
     ) -> anyhow::Result<String> {
-        let feature_dest = build_directory.join(&process.directory_name());
+        let feature_dest = build_directory.join(process.directory_name());
 
         let mut options = fs_extra::dir::CopyOptions::new();
         options.overwrite = true;

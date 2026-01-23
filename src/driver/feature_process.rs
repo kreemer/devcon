@@ -34,7 +34,7 @@
 use std::{
     collections::{HashMap, HashSet, VecDeque},
     fs::{self, File},
-    path::PathBuf,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{Ok, bail};
@@ -109,9 +109,7 @@ impl FeatureProcessResult {
 ///
 /// Returns an error if any feature fails to download, extract, or if there are
 /// circular dependencies.
-pub fn process_features<'a>(
-    features: &'a [FeatureRef],
-) -> anyhow::Result<Vec<FeatureProcessResult>> {
+pub fn process_features(features: &[FeatureRef]) -> anyhow::Result<Vec<FeatureProcessResult>> {
     println!("Processing features..");
     let mut initial_results: Vec<FeatureProcessResult> = vec![];
 
@@ -127,7 +125,6 @@ pub fn process_features<'a>(
                     .file_name()
                     .ok_or_else(|| anyhow::anyhow!("Could not get basename of directory"))?
                     .to_string_lossy()
-                    .to_string()
             ),
         }
         let feature_result = process_feature(feature_ref)?;
@@ -295,7 +292,7 @@ fn topological_sort(
     // Build the dependency graph
     for (feature_id, feature_result) in &feature_map {
         in_degree.entry(feature_id.clone()).or_insert(0);
-        adjacency.entry(feature_id.clone()).or_insert_with(Vec::new);
+        adjacency.entry(feature_id.clone()).or_default();
 
         let mut dependencies = Vec::new();
 
@@ -324,7 +321,7 @@ fn topological_sort(
                 // Extract the last component (feature name) from the URL
                 dep_id
                     .split('/')
-                    .last()
+                    .next_back()
                     .unwrap_or(&dep_id)
                     .split(':')
                     .next()
@@ -342,9 +339,9 @@ fn topological_sort(
                 );
                 adjacency
                     .entry(normalized_dep_id.clone())
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(feature_id.clone());
-                *in_degree.entry(feature_id.clone()).or_insert(0) += 1;
+                *in_degree.entry(feature_id.clone()).or_default() += 1;
             } else {
                 debug!(
                     "  Dependency {} (normalized: {}) not found in feature set for {}",
@@ -410,46 +407,45 @@ fn topological_sort(
     if let Some(common_utils_pos) = sorted
         .iter()
         .position(|f| f.feature.id.contains("common-utils"))
+        && common_utils_pos > 0
     {
-        if common_utils_pos > 0 {
-            // Check if common-utils has ANY dependencies in the feature set
-            // If it does, they must all be before it in the sorted order (guaranteed by topo sort)
-            // We can only move it to position 0 if it has NO dependencies
-            let has_any_dependencies = {
-                let mut deps = Vec::new();
+        // Check if common-utils has ANY dependencies in the feature set
+        // If it does, they must all be before it in the sorted order (guaranteed by topo sort)
+        // We can only move it to position 0 if it has NO dependencies
+        let has_any_dependencies = {
+            let mut deps = Vec::new();
 
-                if let Some(ref depends_on) = sorted[common_utils_pos].feature.depends_on {
-                    deps.extend(depends_on.keys());
-                }
-
-                if let Some(ref installs_after) = sorted[common_utils_pos].feature.installs_after {
-                    deps.extend(installs_after.iter());
-                }
-
-                // Check if any of these dependencies are in our sorted feature list
-                deps.iter()
-                    .any(|dep_id| sorted.iter().any(|f| &f.feature.id == *dep_id))
-            };
-
-            if !has_any_dependencies {
-                debug!("Moving common-utils to the beginning of the feature list");
-                let common_utils = sorted.remove(common_utils_pos);
-                sorted.insert(0, common_utils);
-
-                debug!("Reordered feature list with common-utils first:");
-                for (i, feature) in sorted.iter().enumerate() {
-                    debug!("  {}. {}", i + 1, feature.feature.id);
-                }
-            } else {
-                debug!("common-utils has dependencies, keeping it in topological order");
+            if let Some(ref depends_on) = sorted[common_utils_pos].feature.depends_on {
+                deps.extend(depends_on.keys());
             }
+
+            if let Some(ref installs_after) = sorted[common_utils_pos].feature.installs_after {
+                deps.extend(installs_after.iter());
+            }
+
+            // Check if any of these dependencies are in our sorted feature list
+            deps.iter()
+                .any(|dep_id| sorted.iter().any(|f| &f.feature.id == *dep_id))
+        };
+
+        if !has_any_dependencies {
+            debug!("Moving common-utils to the beginning of the feature list");
+            let common_utils = sorted.remove(common_utils_pos);
+            sorted.insert(0, common_utils);
+
+            debug!("Reordered feature list with common-utils first:");
+            for (i, feature) in sorted.iter().enumerate() {
+                debug!("  {}. {}", i + 1, feature.feature.id);
+            }
+        } else {
+            debug!("common-utils has dependencies, keeping it in topological order");
         }
     }
 
     Ok(sorted)
 }
 
-pub fn process_feature<'a>(feature_ref: &'a FeatureRef) -> anyhow::Result<FeatureProcessResult> {
+pub fn process_feature(feature_ref: &FeatureRef) -> anyhow::Result<FeatureProcessResult> {
     let relative_path = match &feature_ref.source {
         Registry { registry } => download_feature(registry),
         Local { path } => local_feature(path),
@@ -501,13 +497,13 @@ fn get_cached_feature_path(
 }
 
 /// Get local feature path
-fn local_feature(path: &PathBuf) -> anyhow::Result<PathBuf> {
+fn local_feature(path: &Path) -> anyhow::Result<PathBuf> {
     info!("Using local feature from path: {}", path.display());
     path.canonicalize().map_err(|e| anyhow::anyhow!(e))
 }
 
 /// Download a feature from registry to cache, or use cached version if available
-fn download_feature<'a>(registry: &'a FeatureRegistry) -> anyhow::Result<PathBuf> {
+fn download_feature(registry: &FeatureRegistry) -> anyhow::Result<PathBuf> {
     // First, fetch the manifest to get the layer SHA
     let (token, layer_digest) = fetch_manifest_and_layer_digest(registry)?;
 
@@ -706,6 +702,8 @@ fn download_and_cache_feature(
 }
 
 /// Clear the entire feature cache
+/// TODO: Add command which invokes this function
+#[allow(dead_code)]
 pub fn clear_feature_cache() -> anyhow::Result<()> {
     let cache_dir = get_feature_cache_dir()?;
     if cache_dir.exists() {
@@ -720,6 +718,8 @@ pub fn clear_feature_cache() -> anyhow::Result<()> {
 }
 
 /// Clear cache for a specific feature
+/// TODO: Add command which invokes this function
+#[allow(dead_code)]
 pub fn clear_feature_cache_for(owner: &str, repository: &str, name: &str) -> anyhow::Result<()> {
     let cache_dir = get_feature_cache_dir()?;
     let feature_cache = cache_dir.join(owner).join(repository).join(name);

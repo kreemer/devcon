@@ -37,11 +37,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use tracing::{debug, error, info, warn};
 
+/// Type alias for a port forward entry containing the agent stream, container port, tunnel ID counter, and data port
+type ForwardEntry = (Arc<Mutex<TcpStream>>, u16, Arc<AtomicU32>, u16);
+
 /// Manages active port forwarding sessions
 #[derive(Clone)]
 struct PortForwardManager {
     /// Map of local_port -> (agent_stream, container_port, tunnel_id_counter, data_port)
-    forwards: Arc<Mutex<HashMap<u16, (Arc<Mutex<TcpStream>>, u16, Arc<AtomicU32>, u16)>>>,
+    forwards: Arc<Mutex<HashMap<u16, ForwardEntry>>>,
     /// Map of tunnel_id -> pending client stream
     pending_tunnels: Arc<Mutex<HashMap<u32, TcpStream>>>,
 }
@@ -245,7 +248,7 @@ fn handle_forwarded_connection(
     };
 
     let mut agent = agent_stream.lock().unwrap();
-    send_message(&mut *agent, &message)?;
+    send_message(&mut agent, &message)?;
     drop(agent); // Release lock immediately
 
     debug!(
@@ -409,7 +412,7 @@ fn handle_agent_connection(mut stream: TcpStream, manager: PortForwardManager) -
                     }
                 }
                 Some(ProtoMessage::StopPortForward(fwd)) => {
-                    let port = fwd.port as u32 as u16;
+                    let port = fwd.port as u16;
                     info!("Agent requested stop port forward: {}", port);
 
                     if let Err(e) = manager.stop_forward(port) {

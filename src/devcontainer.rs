@@ -243,11 +243,11 @@ pub enum UserEnvProbe {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WaitFor {
-    InitializeCommand,
-    OnCreateCommand,
-    UpdateContentCommand,
-    PostCreateCommand,
-    PostStartCommand,
+    Initialize,
+    OnCreate,
+    UpdateContent,
+    PostCreate,
+    PostStart,
 }
 
 /// Host requirements
