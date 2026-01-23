@@ -40,8 +40,20 @@ jobs:
       matrix:
         include:
           - os: macos-latest
-            artifact_name: devcon
-            asset_name: devcon-macos-arm64
+            artifact_name1: devcon
+            artifact_name2: devcon-agent
+            asset_name1: devcon-macos-arm64
+            asset_name2: devcon-agent-macos-arm64
+          - os: ubuntu-latest
+            artifact_name1: devcon
+            artifact_name2: devcon-agent
+            asset_name1: devcon-ubuntu-x86_64
+            asset_name2: devcon-agent-ubuntu-x86_64
+          - os: ubuntu-24.04-arm
+            artifact_name1: devcon
+            artifact_name2: devcon-agent
+            asset_name1: devcon-ubuntu-arm64
+            asset_name2: devcon-agent-ubuntu-arm64
 
     steps:
       - name: Checkout repository
@@ -70,20 +82,32 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build release binary
-        run: cargo build --release --verbose
+        run: cargo build --release --workspace --verbose
 
       - name: Strip binary (Unix)
         if: runner.os != 'Windows'
-        run: strip target/release/${{ matrix.artifact_name }}
+        run: |
+          strip target/release/${{ matrix.artifact_name1 }}
+          strip target/release/${{ matrix.artifact_name2 }}
 
-      - name: Upload release asset
+      - name: Upload release asset1
         uses: actions/upload-release-asset@v1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           upload_url: ${{ github.event.release.upload_url }}
-          asset_path: target/release/${{ matrix.artifact_name }}
-          asset_name: ${{ matrix.asset_name }}
+          asset_path: target/release/${{ matrix.artifact_name1 }}
+          asset_name: ${{ matrix.asset_name1 }}
+          asset_content_type: application/octet-stream
+
+      - name: Upload release asset2
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ github.event.release.upload_url }}
+          asset_path: target/release/${{ matrix.artifact_name2 }}
+          asset_name: ${{ matrix.asset_name2 }}
           asset_content_type: application/octet-stream
 
   build-universal-macos:
