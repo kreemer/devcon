@@ -243,10 +243,19 @@ pub enum UserEnvProbe {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WaitFor {
+    #[serde(rename = "initializeCommand")]
     Initialize,
+
+    #[serde(rename = "onCreateCommand")]
     OnCreate,
+
+    #[serde(rename = "updateContentCommand")]
     UpdateContent,
+
+    #[serde(rename = "postCreateCommand")]
     PostCreate,
+
+    #[serde(rename = "postStartCommand")]
     PostStart,
 }
 
