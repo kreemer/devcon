@@ -193,6 +193,21 @@ pub fn stream_build_output(mut child: Child) -> anyhow::Result<std::process::Exi
     Ok(result)
 }
 
+/// Parameters for container runtime execution.
+/// This struct encapsulates additional settings for running containers.
+///
+///
+pub struct RuntimeParameters {
+    /// Additional mounts to apply to the container.
+    pub additional_mounts: Vec<crate::devcontainer::Mount>,
+
+    /// Port forwards to apply to the container.
+    pub ports: Vec<crate::devcontainer::ForwardPort>,
+
+    /// Whether the container requires privileged mode.
+    pub requires_privileged: bool,
+}
+
 /// Trait for container runtime implementations.
 ///
 /// This trait defines the interface for interacting with container runtimes,
@@ -229,9 +244,7 @@ pub trait ContainerRuntime: Send {
     /// * `volume_mount` - Volume mount in format "host_path:container_path"
     /// * `label` - Label in format "key=value"
     /// * `env_vars` - Environment variables to set
-    /// * `additional_mounts` - Additional mounts from features and devcontainer config
-    /// * `ports` - Port forward configurations
-    /// * `requires_privileged` - Whether the container needs privileged mode
+    /// * `runtime_parameters` - Additional runtime parameters
     ///
     /// # Errors
     ///
@@ -242,9 +255,7 @@ pub trait ContainerRuntime: Send {
         volume_mount: &str,
         label: &str,
         env_vars: &[String],
-        additional_mounts: &[crate::devcontainer::Mount],
-        ports: &[crate::devcontainer::ForwardPort],
-        requires_privileged: bool,
+        runtime_parameters: RuntimeParameters,
     ) -> anyhow::Result<Box<dyn ContainerHandle>>;
 
     /// Executes a command in a running container.

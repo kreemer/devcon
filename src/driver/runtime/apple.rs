@@ -31,6 +31,8 @@ use std::{
 
 use anyhow::bail;
 
+use crate::driver::runtime::RuntimeParameters;
+
 use super::{ContainerRuntime, stream_build_output};
 
 /// Apple's container CLI runtime implementation.
@@ -86,9 +88,7 @@ impl ContainerRuntime for AppleRuntime {
         volume_mount: &str,
         label: &str,
         env_vars: &[String],
-        additional_mounts: &[crate::devcontainer::Mount],
-        ports: &[crate::devcontainer::ForwardPort],
-        requires_privileged: bool,
+        runtime_parameters: RuntimeParameters,
     ) -> anyhow::Result<Box<dyn super::ContainerHandle>> {
         let mut cmd = Command::new("container");
         cmd.arg("run")
@@ -100,7 +100,7 @@ impl ContainerRuntime for AppleRuntime {
             .arg(label);
 
         // Add privileged flag if required
-        if requires_privileged {
+        if runtime_parameters.requires_privileged {
             cmd.arg("--privileged");
         }
 
@@ -110,7 +110,7 @@ impl ContainerRuntime for AppleRuntime {
         }
 
         // Add additional mounts from features and devcontainer config
-        for mount in additional_mounts {
+        for mount in runtime_parameters.additional_mounts {
             match mount {
                 crate::devcontainer::Mount::String(mount_str) => {
                     cmd.arg("-v").arg(mount_str);
@@ -141,7 +141,7 @@ impl ContainerRuntime for AppleRuntime {
         }
 
         // Add port forwards
-        for port in ports {
+        for port in runtime_parameters.ports {
             cmd.arg("-p").arg(port.to_string());
         }
 

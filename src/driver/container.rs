@@ -64,6 +64,7 @@ use tracing::{debug, info, trace, warn};
 use crate::devcontainer::{FeatureRef, FeatureSource};
 use crate::driver::agent::{self, AgentConfig};
 use crate::driver::feature_process::FeatureProcessResult;
+use crate::driver::runtime::RuntimeParameters;
 use crate::{
     config::Config, devcontainer::LifecycleCommand, driver::feature_process::process_features,
     driver::runtime::ContainerRuntime, workspace::Workspace,
@@ -736,9 +737,11 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             &volume_mount,
             &label,
             &processed_env_vars,
-            &all_mounts,
-            &ports,
-            requires_privileged,
+            RuntimeParameters {
+                additional_mounts: all_mounts,
+                ports,
+                requires_privileged,
+            },
         )?;
 
         match &devcontainer_workspace.devcontainer.on_create_command {

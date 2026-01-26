@@ -32,6 +32,8 @@ use std::{
 use anyhow::bail;
 use tracing::trace;
 
+use crate::driver::runtime::RuntimeParameters;
+
 use super::{ContainerRuntime, stream_build_output};
 
 /// Docker CLI runtime implementation.
@@ -87,9 +89,7 @@ impl ContainerRuntime for DockerRuntime {
         volume_mount: &str,
         label: &str,
         env_vars: &[String],
-        additional_mounts: &[crate::devcontainer::Mount],
-        ports: &[crate::devcontainer::ForwardPort],
-        requires_privileged: bool,
+        runtime_parameters: RuntimeParameters,
     ) -> anyhow::Result<Box<dyn super::ContainerHandle>> {
         trace!("Running Docker container with image: {}", image_tag);
         let mut cmd = Command::new("docker");
@@ -102,7 +102,7 @@ impl ContainerRuntime for DockerRuntime {
             .arg(label);
 
         // Add privileged flag if required
-        if requires_privileged {
+        if runtime_parameters.requires_privileged {
             cmd.arg("--privileged");
         }
 
@@ -112,7 +112,7 @@ impl ContainerRuntime for DockerRuntime {
         }
 
         // Add additional mounts from features and devcontainer config
-        for mount in additional_mounts {
+        for mount in runtime_parameters.additional_mounts {
             match mount {
                 crate::devcontainer::Mount::String(mount_str) => {
                     cmd.arg("-v").arg(mount_str);
@@ -143,7 +143,7 @@ impl ContainerRuntime for DockerRuntime {
         }
 
         // Add port forwards
-        for port in ports {
+        for port in runtime_parameters.ports {
             cmd.arg("-p").arg(port.to_string());
         }
 
