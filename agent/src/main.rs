@@ -270,6 +270,9 @@ fn run_daemon(host: &str, port: u16, scan_interval_secs: u64) -> io::Result<()> 
     let stream = connect_to_control_server(host, port)?;
     eprintln!("Connected to control server");
 
+    // Set read timeout to prevent blocking indefinitely and allow scanner thread to acquire lock
+    stream.set_read_timeout(Some(Duration::from_millis(100)))?;
+
     let stream = Arc::new(Mutex::new(stream));
     let scan_failed_warning_shown = Arc::new(AtomicBool::new(false));
 
@@ -287,6 +290,8 @@ fn run_daemon(host: &str, port: u16, scan_interval_secs: u64) -> io::Result<()> 
                 match scan_listening_ports() {
                     Ok(current_ports) => {
                         let current_set: HashSet<u16> = current_ports.into_iter().collect();
+                        eprintln!("Port scan: found {} listening ports: {:?}", current_set.len(), current_set);
+                        eprintln!("Currently forwarded: {:?}, candidates: {:?}", forwarded_ports, candidate_new_ports);
 
                         // Find ports that are listening but not yet forwarded
                         let new_ports: HashSet<u16> =
@@ -306,16 +311,15 @@ fn run_daemon(host: &str, port: u16, scan_interval_secs: u64) -> io::Result<()> 
                                         StartPortForward { port: *port as u32 },
                                     )),
                                 };
-                                if let Ok(mut stream) = stream_clone.lock() {
-                                    if let Err(e) = send_message(&mut stream, &msg) {
-                                        eprintln!(
-                                            "Failed to send StartPortForward for port {}: {}",
-                                            port, e
-                                        );
-                                    } else {
-                                        forwarded_ports.insert(*port);
-                                        candidate_new_ports.remove(port);
-                                    }
+                                let mut stream = stream_clone.lock().unwrap();
+                                if let Err(e) = send_message(&mut stream, &msg) {
+                                    eprintln!(
+                                        "Failed to send StartPortForward for port {}: {}",
+                                        port, e
+                                    );
+                                } else {
+                                    forwarded_ports.insert(*port);
+                                    candidate_new_ports.remove(port);
                                 }
                             } else {
                                 // First time seeing this port, add to candidates
@@ -336,16 +340,15 @@ fn run_daemon(host: &str, port: u16, scan_interval_secs: u64) -> io::Result<()> 
                                         StopPortForward { port: *port as u32 },
                                     )),
                                 };
-                                if let Ok(mut stream) = stream_clone.lock() {
-                                    if let Err(e) = send_message(&mut stream, &msg) {
-                                        eprintln!(
-                                            "Failed to send StopPortForward for port {}: {}",
-                                            port, e
-                                        );
-                                    } else {
-                                        forwarded_ports.remove(port);
-                                        candidate_removed_ports.remove(port);
-                                    }
+                                let mut stream = stream_clone.lock().unwrap();
+                                if let Err(e) = send_message(&mut stream, &msg) {
+                                    eprintln!(
+                                        "Failed to send StopPortForward for port {}: {}",
+                                        port, e
+                                    );
+                                } else {
+                                    forwarded_ports.remove(port);
+                                    candidate_removed_ports.remove(port);
                                 }
                             } else {
                                 // First time not seeing this port, add to candidates
@@ -411,6 +414,10 @@ fn run_daemon(host: &str, port: u16, scan_interval_secs: u64) -> io::Result<()> 
                 }
             }
             Err(e) => {
+                // Ignore timeout errors (expected due to read timeout)
+                if e.kind() == io::ErrorKind::WouldBlock || e.kind() == io::ErrorKind::TimedOut {
+                    continue;
+                }
                 if e.kind() == io::ErrorKind::UnexpectedEof {
                     eprintln!("Control server connection closed");
                     break;
