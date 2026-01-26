@@ -722,12 +722,22 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             }
         }
 
+        // Handle port forward requests
+        let ports = devcontainer_workspace
+            .devcontainer
+            .forward_ports
+            .clone()
+            .unwrap_or_default();
+
+        debug!("Starting container with ports: {:?}", ports);
+
         let handle = self.runtime.run(
             &self.get_image_tag(&devcontainer_workspace),
             &volume_mount,
             &label,
             &processed_env_vars,
             &all_mounts,
+            &ports,
             requires_privileged,
         )?;
 

@@ -87,6 +87,7 @@ impl ContainerRuntime for AppleRuntime {
         label: &str,
         env_vars: &[String],
         additional_mounts: &[crate::devcontainer::Mount],
+        ports: &[crate::devcontainer::ForwardPort],
         requires_privileged: bool,
     ) -> anyhow::Result<Box<dyn super::ContainerHandle>> {
         let mut cmd = Command::new("container");
@@ -137,6 +138,11 @@ impl ContainerRuntime for AppleRuntime {
                     cmd.arg("--mount").arg(mount_arg);
                 }
             }
+        }
+
+        // Add port forwards
+        for port in ports {
+            cmd.arg("-p").arg(port.to_string());
         }
 
         cmd.arg(image_tag);

@@ -93,12 +93,20 @@ impl LifecycleCommandValue {
 /// Represents a port forwarding configuration
 #[derive(Debug, Clone, Deserialize)]
 #[serde(untagged)]
-#[allow(dead_code)]
 pub enum ForwardPort {
     /// Simple port number
     Port(u16),
     /// Host:port format
     HostPort(String),
+}
+
+impl std::fmt::Display for ForwardPort {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ForwardPort::Port(port) => write!(f, "{}", port),
+            ForwardPort::HostPort(mapping) => write!(f, "{}", mapping),
+        }
+    }
 }
 
 /// Port attributes for forwarded ports
