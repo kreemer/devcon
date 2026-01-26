@@ -640,13 +640,47 @@ impl TryFrom<PathBuf> for Devcontainer {
     type Error = anyhow::Error;
 
     fn try_from(path: PathBuf) -> std::result::Result<Self, Self::Error> {
-        let final_path = path.join(".devcontainer").join("devcontainer.json");
-        if fs::exists(&final_path).is_err() {
-            bail!(
-                "Devcontainer definition not found in {}",
-                &final_path.to_string_lossy()
-            )
+        // Check locations in order of precedence per devcontainer spec:
+        // 1. .devcontainer/devcontainer.json
+        // 2. .devcontainer.json
+        // 3. .devcontainer/<folder>/devcontainer.json (one level deep)
+
+        let primary_paths = vec![
+            path.join(".devcontainer").join("devcontainer.json"),
+            path.join("devcontainer.json"),
+        ];
+
+        // Find the first existing path from primary locations
+        let mut final_path = None;
+        for p in primary_paths {
+            if fs::exists(&p).unwrap_or(false) {
+                final_path = Some(p);
+                break;
+            }
         }
+
+        // If not found in primary locations, check .devcontainer subfolders (one level deep)
+        if final_path.is_none() {
+            let devcontainer_dir = path.join(".devcontainer");
+            if let Ok(entries) = fs::read_dir(&devcontainer_dir) {
+                for entry in entries.flatten() {
+                    if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                        let candidate = entry.path().join("devcontainer.json");
+                        if fs::exists(&candidate).unwrap_or(false) {
+                            final_path = Some(candidate);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        let final_path = final_path.ok_or_else(|| {
+            anyhow::anyhow!(
+                "Devcontainer definition not found in any standard location under {}",
+                path.to_string_lossy()
+            )
+        })?;
 
         let file_result = fs::read_to_string(&final_path);
 
@@ -681,7 +715,10 @@ impl TryFrom<String> for Devcontainer {
     type Error = serde_json::Error;
 
     fn try_from(content: String) -> std::result::Result<Self, Self::Error> {
-        serde_json::from_str(&content)
+        let mut data = content.clone();
+        json_strip_comments::strip(&mut data).unwrap();
+
+        serde_json::from_str(&data)
     }
 }
 
