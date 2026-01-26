@@ -5,8 +5,13 @@
 use clap::{Parser, Subcommand};
 use devcon_proto::{AgentMessage, OpenUrl, StartPortForward, StopPortForward, agent_message};
 use prost::Message;
-use std::io::{self, Read, Write};
+use std::collections::HashSet;
+use std::fs::File;
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 #[derive(Parser)]
 #[command(name = "devcon-agent")]
@@ -55,7 +60,11 @@ enum Commands {
         url: String,
     },
     /// Run as a daemon, maintaining connection to control server
-    Daemon,
+    Daemon {
+        /// Port scan interval in seconds
+        #[arg(long, default_value = "5")]
+        scan_interval: u64,
+    },
 }
 
 /// Send a protobuf message over a TCP stream with length prefix
@@ -154,6 +163,61 @@ fn handle_tunnel_request(
     result.map(|_| ())
 }
 
+/// Scan for listening ports on the container
+/// Reads /proc/net/tcp and /proc/net/tcp6 to find ports in LISTEN state (0A)
+/// Returns only ports > 1024 (non-privileged ports)
+fn scan_listening_ports() -> io::Result<Vec<u16>> {
+    let mut ports = HashSet::new();
+
+    // Read IPv4 listening ports from /proc/net/tcp
+    if let Ok(file) = File::open("/proc/net/tcp") {
+        let reader = BufReader::new(file);
+        for line in reader.lines().skip(1).flatten() {
+            // Skip header line
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 4 {
+                let state = parts[3];
+                // 0A = LISTEN state in hex
+                if state == "0A" {
+                    // Local address is in format "ADDR:PORT" in hex
+                    if let Some(local_addr) = parts.get(1)
+                        && let Some(port_hex) = local_addr.split(':').nth(1)
+                        && let Ok(port) = u16::from_str_radix(port_hex, 16)
+                        && port > 1024
+                    {
+                        ports.insert(port);
+                    }
+                }
+            }
+        }
+    }
+
+    // Read IPv6 listening ports from /proc/net/tcp6
+    if let Ok(file) = File::open("/proc/net/tcp6") {
+        let reader = BufReader::new(file);
+        for line in reader.lines().skip(1).flatten() {
+            // Skip header line
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if parts.len() >= 4 {
+                let state = parts[3];
+                // 0A = LISTEN state in hex
+                if state == "0A" {
+                    // Local address is in format "ADDR:PORT" in hex
+                    if let Some(local_addr) = parts.get(1)
+                        && let Some(port_hex) = local_addr.split(':').nth(1)
+                        && let Ok(port) = u16::from_str_radix(port_hex, 16)
+                        && port > 1024
+                    {
+                        ports.insert(port);
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(ports.into_iter().collect())
+}
+
 /// Run port forward daemon for a specific port
 fn run_port_forward_daemon(stream: &mut TcpStream, port: u16, host: &str) -> io::Result<()> {
     eprintln!("Port forward daemon running for port {}", port);
@@ -202,13 +266,122 @@ fn run_port_forward_daemon(stream: &mut TcpStream, port: u16, host: &str) -> io:
 }
 
 /// Run the agent as a daemon, maintaining connection to control server
-fn run_daemon(host: &str, port: u16) -> io::Result<()> {
-    let mut stream = connect_to_control_server(host, port)?;
+fn run_daemon(host: &str, port: u16, scan_interval_secs: u64) -> io::Result<()> {
+    let stream = connect_to_control_server(host, port)?;
     eprintln!("Connected to control server");
+
+    let stream = Arc::new(Mutex::new(stream));
+    let scan_failed_warning_shown = Arc::new(AtomicBool::new(false));
+
+    // Spawn port scanner thread
+    {
+        let stream_clone = Arc::clone(&stream);
+        let scan_failed_warning = Arc::clone(&scan_failed_warning_shown);
+        std::thread::spawn(move || {
+            let mut forwarded_ports: HashSet<u16> = HashSet::new();
+            let mut candidate_new_ports: HashSet<u16> = HashSet::new();
+            let mut candidate_removed_ports: HashSet<u16> = HashSet::new();
+
+            loop {
+                // Scan for listening ports
+                match scan_listening_ports() {
+                    Ok(current_ports) => {
+                        let current_set: HashSet<u16> = current_ports.into_iter().collect();
+
+                        // Find ports that are listening but not yet forwarded
+                        let new_ports: HashSet<u16> =
+                            current_set.difference(&forwarded_ports).copied().collect();
+
+                        // Find ports that are forwarded but no longer listening
+                        let removed_ports: HashSet<u16> =
+                            forwarded_ports.difference(&current_set).copied().collect();
+
+                        // Process new ports with debouncing (2 consecutive scans)
+                        for port in &new_ports {
+                            if candidate_new_ports.contains(port) {
+                                // Port seen in 2 consecutive scans, start forwarding
+                                eprintln!("Auto-forwarding port {} (detected)", port);
+                                let msg = AgentMessage {
+                                    message: Some(agent_message::Message::StartPortForward(
+                                        StartPortForward { port: *port as u32 },
+                                    )),
+                                };
+                                if let Ok(mut stream) = stream_clone.lock() {
+                                    if let Err(e) = send_message(&mut stream, &msg) {
+                                        eprintln!(
+                                            "Failed to send StartPortForward for port {}: {}",
+                                            port, e
+                                        );
+                                    } else {
+                                        forwarded_ports.insert(*port);
+                                        candidate_new_ports.remove(port);
+                                    }
+                                }
+                            } else {
+                                // First time seeing this port, add to candidates
+                                candidate_new_ports.insert(*port);
+                            }
+                        }
+
+                        // Clean up candidates that are no longer new
+                        candidate_new_ports.retain(|p| new_ports.contains(p));
+
+                        // Process removed ports with debouncing (2 consecutive scans)
+                        for port in &removed_ports {
+                            if candidate_removed_ports.contains(port) {
+                                // Port absent in 2 consecutive scans, stop forwarding
+                                eprintln!("Stopping auto-forwarding for port {} (closed)", port);
+                                let msg = AgentMessage {
+                                    message: Some(agent_message::Message::StopPortForward(
+                                        StopPortForward { port: *port as u32 },
+                                    )),
+                                };
+                                if let Ok(mut stream) = stream_clone.lock() {
+                                    if let Err(e) = send_message(&mut stream, &msg) {
+                                        eprintln!(
+                                            "Failed to send StopPortForward for port {}: {}",
+                                            port, e
+                                        );
+                                    } else {
+                                        forwarded_ports.remove(port);
+                                        candidate_removed_ports.remove(port);
+                                    }
+                                }
+                            } else {
+                                // First time not seeing this port, add to candidates
+                                candidate_removed_ports.insert(*port);
+                            }
+                        }
+
+                        // Clean up candidates that are no longer removed
+                        candidate_removed_ports.retain(|p| removed_ports.contains(p));
+                    }
+                    Err(e) => {
+                        // Show warning only once
+                        if !scan_failed_warning.swap(true, Ordering::SeqCst) {
+                            eprintln!(
+                                "Warning: Port scanning failed ({}). Auto-forwarding disabled. \
+                                This is normal on non-Linux systems.",
+                                e
+                            );
+                        }
+                    }
+                }
+
+                // Sleep for the scan interval
+                std::thread::sleep(Duration::from_secs(scan_interval_secs));
+            }
+        });
+    }
 
     // Keep the connection alive and handle any incoming messages
     loop {
-        match read_message(&mut stream) {
+        let message = {
+            let mut stream = stream.lock().unwrap();
+            read_message(&mut stream)
+        };
+
+        match message {
             Ok(message) => {
                 eprintln!("Received message from host: {:?}", message);
                 // Handle incoming messages from host
@@ -300,7 +473,9 @@ fn main() {
                 Err(e) => Err(e),
             }
         }
-        Commands::Daemon => run_daemon(&cli.control_host, cli.control_port),
+        Commands::Daemon { scan_interval } => {
+            run_daemon(&cli.control_host, cli.control_port, scan_interval)
+        }
     };
 
     if let Err(e) = result {
