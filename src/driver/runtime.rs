@@ -230,6 +230,8 @@ pub trait ContainerRuntime: Send {
     /// * `label` - Label in format "key=value"
     /// * `env_vars` - Environment variables to set
     /// * `additional_mounts` - Additional mounts from features and devcontainer config
+    /// * `ports` - Port forward configurations
+    /// * `requires_privileged` - Whether the container needs privileged mode
     ///
     /// # Errors
     ///
@@ -241,6 +243,7 @@ pub trait ContainerRuntime: Send {
         label: &str,
         env_vars: &[String],
         additional_mounts: &[crate::devcontainer::Mount],
+        ports: &[crate::devcontainer::ForwardPort],
         requires_privileged: bool,
     ) -> anyhow::Result<Box<dyn ContainerHandle>>;
 

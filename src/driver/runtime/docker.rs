@@ -88,6 +88,7 @@ impl ContainerRuntime for DockerRuntime {
         label: &str,
         env_vars: &[String],
         additional_mounts: &[crate::devcontainer::Mount],
+        ports: &[crate::devcontainer::ForwardPort],
         requires_privileged: bool,
     ) -> anyhow::Result<Box<dyn super::ContainerHandle>> {
         trace!("Running Docker container with image: {}", image_tag);
@@ -139,6 +140,11 @@ impl ContainerRuntime for DockerRuntime {
                     cmd.arg("--mount").arg(mount_arg);
                 }
             }
+        }
+
+        // Add port forwards
+        for port in ports {
+            cmd.arg("-p").arg(port.to_string());
         }
 
         cmd.arg(image_tag);
