@@ -9,8 +9,9 @@ use std::collections::HashSet;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::mpsc::{self, TryRecvError};
 use std::time::Duration;
 
 #[derive(Parser)]
@@ -267,18 +268,19 @@ fn run_port_forward_daemon(stream: &mut TcpStream, port: u16, host: &str) -> io:
 
 /// Run the agent as a daemon, maintaining connection to control server
 fn run_daemon(host: &str, port: u16, scan_interval_secs: u64) -> io::Result<()> {
-    let stream = connect_to_control_server(host, port)?;
+    let mut stream = connect_to_control_server(host, port)?;
     eprintln!("Connected to control server");
 
-    // Set read timeout to prevent blocking indefinitely and allow scanner thread to acquire lock
+    // Set read timeout to allow checking channel messages periodically
     stream.set_read_timeout(Some(Duration::from_millis(100)))?;
 
-    let stream = Arc::new(Mutex::new(stream));
     let scan_failed_warning_shown = Arc::new(AtomicBool::new(false));
+
+    // Create channel for port scanner to send messages to main thread
+    let (tx, rx) = mpsc::channel::<AgentMessage>();
 
     // Spawn port scanner thread
     {
-        let stream_clone = Arc::clone(&stream);
         let scan_failed_warning = Arc::clone(&scan_failed_warning_shown);
         std::thread::spawn(move || {
             let mut forwarded_ports: HashSet<u16> = HashSet::new();
@@ -290,8 +292,6 @@ fn run_daemon(host: &str, port: u16, scan_interval_secs: u64) -> io::Result<()> 
                 match scan_listening_ports() {
                     Ok(current_ports) => {
                         let current_set: HashSet<u16> = current_ports.into_iter().collect();
-                        eprintln!("Port scan: found {} listening ports: {:?}", current_set.len(), current_set);
-                        eprintln!("Currently forwarded: {:?}, candidates: {:?}", forwarded_ports, candidate_new_ports);
 
                         // Find ports that are listening but not yet forwarded
                         let new_ports: HashSet<u16> =
@@ -311,15 +311,14 @@ fn run_daemon(host: &str, port: u16, scan_interval_secs: u64) -> io::Result<()> 
                                         StartPortForward { port: *port as u32 },
                                     )),
                                 };
-                                let mut stream = stream_clone.lock().unwrap();
-                                if let Err(e) = send_message(&mut stream, &msg) {
-                                    eprintln!(
-                                        "Failed to send StartPortForward for port {}: {}",
-                                        port, e
-                                    );
-                                } else {
+                                if tx.send(msg).is_ok() {
                                     forwarded_ports.insert(*port);
                                     candidate_new_ports.remove(port);
+                                } else {
+                                    eprintln!(
+                                        "Failed to send StartPortForward for port {}: channel closed",
+                                        port
+                                    );
                                 }
                             } else {
                                 // First time seeing this port, add to candidates
@@ -340,15 +339,14 @@ fn run_daemon(host: &str, port: u16, scan_interval_secs: u64) -> io::Result<()> 
                                         StopPortForward { port: *port as u32 },
                                     )),
                                 };
-                                let mut stream = stream_clone.lock().unwrap();
-                                if let Err(e) = send_message(&mut stream, &msg) {
-                                    eprintln!(
-                                        "Failed to send StopPortForward for port {}: {}",
-                                        port, e
-                                    );
-                                } else {
+                                if tx.send(msg).is_ok() {
                                     forwarded_ports.remove(port);
                                     candidate_removed_ports.remove(port);
+                                } else {
+                                    eprintln!(
+                                        "Failed to send StopPortForward for port {}: channel closed",
+                                        port
+                                    );
                                 }
                             } else {
                                 // First time not seeing this port, add to candidates
@@ -379,12 +377,25 @@ fn run_daemon(host: &str, port: u16, scan_interval_secs: u64) -> io::Result<()> 
 
     // Keep the connection alive and handle any incoming messages
     loop {
-        let message = {
-            let mut stream = stream.lock().unwrap();
-            read_message(&mut stream)
-        };
+        // Check for port forward requests from scanner thread
+        match rx.try_recv() {
+            Ok(msg) => {
+                eprintln!("Sending port forward request from scanner");
+                if let Err(e) = send_message(&mut stream, &msg) {
+                    eprintln!("Failed to send message to control server: {}", e);
+                }
+            }
+            Err(TryRecvError::Empty) => {
+                // No messages from scanner, continue
+            }
+            Err(TryRecvError::Disconnected) => {
+                eprintln!("Scanner thread disconnected");
+                break;
+            }
+        }
 
-        match message {
+        // Read incoming messages from control server
+        match read_message(&mut stream) {
             Ok(message) => {
                 eprintln!("Received message from host: {:?}", message);
                 // Handle incoming messages from host
