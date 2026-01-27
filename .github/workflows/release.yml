@@ -40,16 +40,19 @@ jobs:
       matrix:
         include:
           - os: macos-latest
+            target: macos
             artifact_name1: devcon
             artifact_name2: devcon-agent
             asset_name1: devcon-macos-arm64
             asset_name2: devcon-agent-macos-arm64
           - os: ubuntu-latest
+            target: linux
             artifact_name1: devcon
             artifact_name2: devcon-agent
             asset_name1: devcon-ubuntu-x86_64
             asset_name2: devcon-agent-ubuntu-x86_64
           - os: ubuntu-24.04-arm
+            target: linux
             artifact_name1: devcon
             artifact_name2: devcon-agent
             asset_name1: devcon-ubuntu-arm64
@@ -77,7 +80,7 @@ jobs:
             ~/.cargo/registry/cache/
             ~/.cargo/git/db/
             target/
-          key: ${{ runner.os }}-${{ runner.arch }}cargo-${{ hashFiles('**/Cargo.lock') }}
+          key: ${{ matrix.target }}-${{ runner.arch }}cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: |
             ${{ runner.os }}-${{ runner.arch }}-cargo-
 
