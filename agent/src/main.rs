@@ -36,6 +36,10 @@ struct Cli {
     )]
     control_port: u16,
 
+    /// Comma-separated list of ports to exclude from auto-forwarding
+    #[arg(long, value_delimiter = ',')]
+    exclude_ports: Option<Vec<u16>>,
+
     #[command(subcommand)]
     command: Commands,
 }
@@ -267,7 +271,12 @@ fn run_port_forward_daemon(stream: &mut TcpStream, port: u16, host: &str) -> io:
 }
 
 /// Run the agent as a daemon, maintaining connection to control server
-fn run_daemon(host: &str, port: u16, scan_interval_secs: u64) -> io::Result<()> {
+fn run_daemon(
+    host: &str,
+    port: u16,
+    scan_interval_secs: u64,
+    excluded_ports: HashSet<u16>,
+) -> io::Result<()> {
     let mut stream = connect_to_control_server(host, port)?;
     eprintln!("Connected to control server");
 
@@ -300,6 +309,10 @@ fn run_daemon(host: &str, port: u16, scan_interval_secs: u64) -> io::Result<()> 
                         // Find ports that are forwarded but no longer listening
                         let removed_ports: HashSet<u16> =
                             forwarded_ports.difference(&current_set).copied().collect();
+
+                        // Filter out excluded ports (already forwarded by Docker)
+                        let new_ports: HashSet<u16> =
+                            new_ports.difference(&excluded_ports).copied().collect();
 
                         // Process new ports with debouncing (2 consecutive scans)
                         for port in &new_ports {
@@ -492,7 +505,29 @@ fn main() {
             }
         }
         Commands::Daemon { scan_interval } => {
-            run_daemon(&cli.control_host, cli.control_port, scan_interval)
+            // Parse excluded ports from CLI arg or environment variable
+            let mut excluded_ports = HashSet::new();
+
+            if let Some(ports) = cli.exclude_ports {
+                excluded_ports.extend(ports);
+            } else if let Ok(env_ports) = std::env::var("DEVCON_FORWARDED_PORTS") {
+                for port_str in env_ports.split(',') {
+                    if let Ok(port) = port_str.trim().parse::<u16>() {
+                        excluded_ports.insert(port);
+                    }
+                }
+            }
+
+            if !excluded_ports.is_empty() {
+                eprintln!("Excluding ports from auto-forwarding: {:?}", excluded_ports);
+            }
+
+            run_daemon(
+                &cli.control_host,
+                cli.control_port,
+                scan_interval,
+                excluded_ports,
+            )
         }
     };
 
