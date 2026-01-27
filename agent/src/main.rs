@@ -67,7 +67,7 @@ enum Commands {
     /// Run as a daemon, maintaining connection to control server
     Daemon {
         /// Port scan interval in seconds
-        #[arg(long, default_value = "5")]
+        #[arg(long, default_value = "1")]
         scan_interval: u64,
     },
 }
