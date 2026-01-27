@@ -35,6 +35,23 @@ use crate::driver::runtime::RuntimeParameters;
 
 use super::{ContainerRuntime, stream_build_output};
 
+/// Extract container-side port from a ForwardPort
+fn extract_container_port(port: &crate::devcontainer::ForwardPort) -> Option<u16> {
+    use crate::devcontainer::ForwardPort;
+    match port {
+        ForwardPort::Port(p) => Some(*p),
+        ForwardPort::HostPort(mapping) => {
+            // Format is "host:container", we want the container port
+            mapping.split(':').nth(1).and_then(|s| {
+                s.parse::<u16>().ok().or_else(|| {
+                    tracing::warn!("Failed to parse container port from mapping: {}", mapping);
+                    None
+                })
+            })
+        }
+    }
+}
+
 /// Apple's container CLI runtime implementation.
 pub struct AppleRuntime;
 
@@ -107,6 +124,19 @@ impl ContainerRuntime for AppleRuntime {
         // Add environment variables
         for env_var in env_vars {
             cmd.arg("-e").arg(env_var);
+        }
+
+        // Add excluded ports environment variable for agent
+        let excluded_ports: Vec<String> = runtime_parameters
+            .ports
+            .iter()
+            .filter_map(extract_container_port)
+            .map(|p| p.to_string())
+            .collect();
+        if !excluded_ports.is_empty() {
+            let excluded_ports_str = excluded_ports.join(",");
+            cmd.arg("-e")
+                .arg(format!("DEVCON_FORWARDED_PORTS={}", excluded_ports_str));
         }
 
         // Add additional mounts from features and devcontainer config
