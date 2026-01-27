@@ -127,7 +127,7 @@ impl Agent {
         std::fs::create_dir_all(&feature_dir).context("Failed to create feature directory")?;
 
         // Generate devcontainer-feature.json
-        self.generate_feature_json(&feature_dir)?;
+        self.generate_feature_json(&feature_dir, self.config.binary_url.is_none())?;
 
         // Generate install.sh
         self.generate_install_script(&feature_dir)?;
@@ -138,20 +138,24 @@ impl Agent {
     }
 
     /// Generate the devcontainer-feature.json file
-    fn generate_feature_json(&self, feature_dir: &Path) -> Result<()> {
+    fn generate_feature_json(&self, feature_dir: &Path, compile_needed: bool) -> Result<()> {
         let mut feature_json = serde_json::json!({
             "id": self.config.id,
             "version": self.config.version,
             "name": self.config.name,
-            "dependsOn": {
-                "ghcr.io/devcontainers/features/rust": {},
-                "ghcr.io/devcontainers-extra/features/protoc": {}
-            },
             "containerEnv": {
                 "DEVCON_AGENT": "1",
                 "BROWSER": "/usr/local/bin/devcon-browser"
-            }
+            },
+            "entrypoint": "echo test && nohup /usr/local/bin/devcon-agent daemon 2>&1 >/tmp/devcon-agent.log &",
         });
+
+        if compile_needed {
+            feature_json["dependsOn"]["ghcr.io/devcontainers/features/rust"] =
+                serde_json::Value::Object(serde_json::Map::new());
+            feature_json["dependsOn"]["ghcr.io/devcontainers-extra/features/protoc"] =
+                serde_json::Value::Object(serde_json::Map::new());
+        }
 
         if let Some(desc) = &self.config.description {
             feature_json["description"] = serde_json::Value::String(desc.clone());
@@ -258,5 +262,37 @@ mod tests {
         assert!(config.git_repository.is_some());
         assert!(config.git_branch.is_some());
         assert!(config.install_script.contains("git clone"));
+    }
+
+    #[test]
+    fn test_agent_with_binary_url_wont_install_dependencies() {
+        let config = AgentConfig::new(
+            Some("https://example.com/devcon-agent".to_string()),
+            None,
+            None,
+        );
+
+        assert!(config.binary_url.is_some());
+        let mut agent = Agent::new(config);
+        let path = agent.generate().expect("Failed to generate configuration");
+        let content = std::fs::read_to_string(path.join("devcontainer-feature.json"))
+            .expect("Failed to read feature JSON");
+
+        assert!(!content.contains("ghcr.io/devcontainers/features/rust"));
+        assert!(!content.contains("ghcr.io/devcontainers-extra/features/protoc"));
+    }
+
+    #[test]
+    fn test_agent_with_agent_compile_will_install_dependencies() {
+        let config = AgentConfig::new(None, None, None);
+
+        assert!(config.binary_url.is_none());
+        let mut agent = Agent::new(config);
+        let path = agent.generate().expect("Failed to generate configuration");
+        let content = std::fs::read_to_string(path.join("devcontainer-feature.json"))
+            .expect("Failed to read feature JSON");
+
+        assert!(content.contains("ghcr.io/devcontainers/features/rust"));
+        assert!(content.contains("ghcr.io/devcontainers-extra/features/protoc"));
     }
 }
