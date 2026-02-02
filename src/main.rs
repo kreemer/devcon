@@ -63,6 +63,10 @@ enum Commands {
             value_name = "PATH"
         )]
         path: Option<PathBuf>,
+
+        /// Path to the build directory.
+        #[arg(short, long, help = "Path to the build directory.")]
+        build_path: Option<PathBuf>,
     },
 
     /// Starts a development container for the specified path
@@ -84,6 +88,10 @@ enum Commands {
             value_name = "PATH"
         )]
         path: Option<PathBuf>,
+
+        /// Path to the build directory.
+        #[arg(short, long, help = "Path to the build directory.")]
+        build_path: Option<PathBuf>,
     },
     /// Execs a shell in a development container for the specified path
     #[command(about = "Exec a shell in a development container with the devcontainer CLI")]
@@ -157,14 +165,20 @@ fn main() -> anyhow::Result<()> {
     trace!("Starting devcon with CLI args: {:?}", cli);
 
     match &cli.command {
-        Commands::Build { path } => {
-            handle_build_command(path.clone().unwrap_or(PathBuf::from(".").to_path_buf()))?;
+        Commands::Build { path, build_path } => {
+            handle_build_command(
+                path.clone().unwrap_or(PathBuf::from(".").to_path_buf()),
+                build_path.clone(),
+            )?;
         }
         Commands::Start { path } => {
             handle_start_command(path.clone().unwrap_or(PathBuf::from(".").to_path_buf()))?;
         }
-        Commands::Up { path } => {
-            handle_up_command(path.clone().unwrap_or(PathBuf::from(".").to_path_buf()))?;
+        Commands::Up { path, build_path } => {
+            handle_up_command(
+                path.clone().unwrap_or(PathBuf::from(".").to_path_buf()),
+                build_path.clone(),
+            )?;
         }
         Commands::Shell { path, env } => {
             handle_shell_command(

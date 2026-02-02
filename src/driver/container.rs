@@ -69,6 +69,7 @@ use crate::{
     config::Config, devcontainer::LifecycleCommand, driver::feature_process::process_features,
     driver::runtime::ContainerRuntime, workspace::Workspace,
 };
+use std::path::PathBuf;
 
 /// Applies a manual override to the feature installation order.
 ///
@@ -241,6 +242,7 @@ impl ContainerDriver {
     ///
     /// * `devcontainer_workspace` - The workspace with devcontainer configuration
     /// * `env_variables` - Environment variables to set in the container
+    /// * `build_path` - Optional path to the build directory
     ///
     /// # Errors
     ///
@@ -267,8 +269,9 @@ impl ContainerDriver {
         &self,
         devcontainer_workspace: Workspace,
         env_variables: &[String],
+        build_path: Option<PathBuf>,
     ) -> anyhow::Result<()> {
-        self.build_with_features(devcontainer_workspace, env_variables, None)
+        self.build_with_features(devcontainer_workspace, env_variables, None, build_path)
     }
 
     /// Builds a container image with optional pre-processed features.
@@ -281,6 +284,7 @@ impl ContainerDriver {
     /// * `devcontainer_workspace` - The workspace with devcontainer configuration
     /// * `env_variables` - Environment variables to set in the container
     /// * `processed_features` - Optional pre-processed features to use
+    /// * `build_path` - Optional path to the build directory
     ///
     /// # Errors
     ///
@@ -294,8 +298,15 @@ impl ContainerDriver {
         devcontainer_workspace: Workspace,
         env_variables: &[String],
         processed_features: Option<Vec<FeatureProcessResult>>,
+        build_path: Option<PathBuf>,
     ) -> anyhow::Result<()> {
-        let directory = TempDir::new()?;
+        let directory = match build_path {
+            Some(path) => {
+                std::fs::create_dir_all(&path)?;
+                TempDir::new_in(path)?
+            }
+            None => TempDir::new()?,
+        };
         let directory_path = directory.keep();
         info!(
             "Building container in temporary directory: {}",

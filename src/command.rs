@@ -128,6 +128,7 @@ pub fn handle_config_command(create_if_missing: bool) -> Result<()> {
 /// # Arguments
 ///
 /// * `path` - The path to the project directory containing `.devcontainer/devcontainer.json`
+/// * `build_path` - Optional path to the build directory
 ///
 /// # Errors
 ///
@@ -147,7 +148,7 @@ pub fn handle_config_command(create_if_missing: bool) -> Result<()> {
 /// handle_build_command(project_path)?;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
+pub fn handle_build_command(path: PathBuf, build_path: Option<PathBuf>) -> anyhow::Result<()> {
     let config = Config::load()?;
 
     trace!("Config loaded {:?}", config);
@@ -164,7 +165,7 @@ pub fn handle_build_command(path: PathBuf) -> anyhow::Result<()> {
 
     let driver = ContainerDriver::new(config, runtime);
 
-    let result = driver.build(devcontainer_workspace, &[]);
+    let result = driver.build(devcontainer_workspace, &[], build_path);
 
     if result.is_err() {
         anyhow::bail!(
@@ -273,6 +274,7 @@ pub fn handle_shell_command(path: PathBuf, _env: &[String]) -> anyhow::Result<()
 /// # Arguments
 ///
 /// * `path` - The path to the project directory containing `.devcontainer/devcontainer.json`
+/// * `build_path` - Optional path to the build directory
 ///
 /// # Errors
 ///
@@ -292,7 +294,7 @@ pub fn handle_shell_command(path: PathBuf, _env: &[String]) -> anyhow::Result<()
 /// handle_up_command(project_path)?;
 /// # Ok::<(), anyhow::Error>(())
 /// ```
-pub fn handle_up_command(path: PathBuf) -> anyhow::Result<()> {
+pub fn handle_up_command(path: PathBuf, build_path: Option<PathBuf>) -> anyhow::Result<()> {
     let config = Config::load()?;
     trace!("Config loaded {:?}", config);
     let devcontainer_workspace = Workspace::try_from(path)?;
@@ -316,6 +318,7 @@ pub fn handle_up_command(path: PathBuf) -> anyhow::Result<()> {
         devcontainer_workspace.clone(),
         &[],
         Some(processed_features.clone()),
+        build_path,
     )?;
 
     // Start the container with pre-processed features
