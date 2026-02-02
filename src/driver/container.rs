@@ -414,6 +414,7 @@ fi
         let template = env.template_from_str(
             r#"
 FROM {{ image }} AS base
+
 ENV DEVCON=true
 ENV DEVCON_WORKSPACE_NAME={{ workspace_name }}
 ENV _REMOTE_USER={{ remote_user }}
@@ -622,10 +623,13 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             return Ok(());
         }
 
+        debug!("Checking for existing images");
         let images = self.runtime.images()?;
+        trace!("Images found: {:?}", images);
         let already_built = images.iter().any(|image| {
             image == &format!("{}:latest", self.get_image_tag(&devcontainer_workspace))
         });
+        debug!("Image found: {}", already_built);
 
         if !already_built {
             bail!("Image not found. Run 'devcon build' or 'devcon up' first.");
@@ -758,19 +762,31 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         match &devcontainer_workspace.devcontainer.on_create_command {
             Some(LifecycleCommand::String(cmd)) => {
                 let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, cmd);
-                self.runtime
-                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])?
+                self.runtime.exec(
+                    handle.as_ref(),
+                    vec!["bash", "-c", "-i", &wrapped_cmd],
+                    &[],
+                    false,
+                )?
             }
             Some(LifecycleCommand::Array(cmds)) => cmds.iter().try_for_each(|c| {
                 let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, c);
-                self.runtime
-                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
+                self.runtime.exec(
+                    handle.as_ref(),
+                    vec!["bash", "-c", "-i", &wrapped_cmd],
+                    &[],
+                    false,
+                )
             })?,
             Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
                 let cmd_str = cmd.to_command_string();
                 let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, &cmd_str);
-                self.runtime
-                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
+                self.runtime.exec(
+                    handle.as_ref(),
+                    vec!["bash", "-c", "-i", &wrapped_cmd],
+                    &[],
+                    false,
+                )
             })?,
             None => { /* No onCreateCommand specified */ }
         };
@@ -789,28 +805,42 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
                             .dotfiles_install_command
                             .as_deref()
                             .unwrap_or("")
-                    ),
+                    )
+                    .trim(),
                 ],
                 &[],
+                false,
             )?;
         };
 
         match &devcontainer_workspace.devcontainer.post_create_command {
             Some(LifecycleCommand::String(cmd)) => {
                 let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, cmd);
-                self.runtime
-                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])?
+                self.runtime.exec(
+                    handle.as_ref(),
+                    vec!["bash", "-c", "-i", &wrapped_cmd],
+                    &[],
+                    false,
+                )?
             }
             Some(LifecycleCommand::Array(cmds)) => cmds.iter().try_for_each(|c| {
                 let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, c);
-                self.runtime
-                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
+                self.runtime.exec(
+                    handle.as_ref(),
+                    vec!["bash", "-c", "-i", &wrapped_cmd],
+                    &[],
+                    false,
+                )
             })?,
             Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
                 let cmd_str = cmd.to_command_string();
                 let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, &cmd_str);
-                self.runtime
-                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
+                self.runtime.exec(
+                    handle.as_ref(),
+                    vec!["bash", "-c", "-i", &wrapped_cmd],
+                    &[],
+                    false,
+                )
             })?,
             None => { /* No onCreateCommand specified */ }
         };
@@ -830,6 +860,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
                         handle.as_ref(),
                         vec!["bash", "-c", "-i", &wrapped_cmd],
                         &[],
+                        false,
                     )?;
                 }
                 Ok(())
@@ -838,19 +869,31 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
         match &devcontainer_workspace.devcontainer.post_start_command {
             Some(LifecycleCommand::String(cmd)) => {
                 let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, cmd);
-                self.runtime
-                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])?
+                self.runtime.exec(
+                    handle.as_ref(),
+                    vec!["bash", "-c", "-i", &wrapped_cmd],
+                    &[],
+                    false,
+                )?
             }
             Some(LifecycleCommand::Array(cmds)) => cmds.iter().try_for_each(|c| {
                 let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, c);
-                self.runtime
-                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
+                self.runtime.exec(
+                    handle.as_ref(),
+                    vec!["bash", "-c", "-i", &wrapped_cmd],
+                    &[],
+                    false,
+                )
             })?,
             Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
                 let cmd_str = cmd.to_command_string();
                 let wrapped_cmd = self.wrap_lifecycle_command(&devcontainer_workspace, &cmd_str);
-                self.runtime
-                    .exec(handle.as_ref(), vec!["bash", "-c", "-i", &wrapped_cmd], &[])
+                self.runtime.exec(
+                    handle.as_ref(),
+                    vec!["bash", "-c", "-i", &wrapped_cmd],
+                    &[],
+                    false,
+                )
             })?,
             None => { /* No onCreateCommand specified */ }
         };
@@ -922,6 +965,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
                     handle.as_ref().unwrap().as_ref(),
                     vec!["bash", "-c", "-i", &wrapped_cmd],
                     &[],
+                    false,
                 )?
             }
             Some(LifecycleCommand::Array(cmds)) => cmds.iter().try_for_each(|c| {
@@ -930,6 +974,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
                     handle.as_ref().unwrap().as_ref(),
                     vec!["bash", "-c", "-i", &wrapped_cmd],
                     &[],
+                    false,
                 )
             })?,
             Some(LifecycleCommand::Object(map)) => map.values().try_for_each(|cmd| {
@@ -939,6 +984,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
                     handle.as_ref().unwrap().as_ref(),
                     vec!["bash", "-c", "-i", &wrapped_cmd],
                     &[],
+                    false,
                 )
             })?,
             None => { /* No onCreateCommand specified */ }
@@ -948,6 +994,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             handle.as_ref().unwrap().as_ref(),
             vec![&self.config.default_shell.as_deref().unwrap_or("zsh")],
             &processed_env_vars,
+            true,
         )?;
 
         Ok(())

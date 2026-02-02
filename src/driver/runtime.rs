@@ -274,6 +274,7 @@ pub trait ContainerRuntime: Send {
         container_handle: &dyn ContainerHandle,
         command: Vec<&str>,
         env_vars: &[String],
+        attach_stdin: bool,
     ) -> anyhow::Result<()>;
 
     /// Lists running containers.

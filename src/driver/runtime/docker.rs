@@ -197,9 +197,14 @@ impl ContainerRuntime for DockerRuntime {
         container_handle: &dyn super::ContainerHandle,
         command: Vec<&str>,
         env_vars: &[String],
+        attach_stdin: bool,
     ) -> anyhow::Result<()> {
         let mut cmd = Command::new("docker");
-        cmd.arg("exec").arg("-it");
+        cmd.arg("exec").arg("-t");
+
+        if attach_stdin {
+            cmd.arg("-i");
+        }
 
         for env_var in env_vars {
             cmd.arg("-e").arg(env_var);

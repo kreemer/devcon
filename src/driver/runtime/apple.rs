@@ -27,11 +27,13 @@
 use std::{
     path::Path,
     process::{Command, Stdio},
+    time::Duration,
 };
 
 use anyhow::bail;
 
 use crate::driver::runtime::RuntimeParameters;
+use tracing::{debug, trace};
 
 use super::{ContainerRuntime, stream_build_output};
 
@@ -182,9 +184,10 @@ impl ContainerRuntime for AppleRuntime {
         if result.status.code() != Some(0) {
             bail!("Container start command failed")
         }
+        std::thread::sleep(Duration::from_secs(10));
 
         Ok(Box::new(AppleContainerHandle {
-            id: String::from_utf8_lossy(&result.stdout).to_string(),
+            id: String::from_utf8_lossy(&result.stdout).trim().to_string(),
         }))
     }
 
@@ -193,15 +196,23 @@ impl ContainerRuntime for AppleRuntime {
         container_handle: &dyn super::ContainerHandle,
         command: Vec<&str>,
         env_vars: &[String],
+        attach_stdin: bool,
     ) -> anyhow::Result<()> {
         let mut cmd = Command::new("container");
-        cmd.arg("exec").arg("-it");
+        cmd.arg("exec").arg("-t");
+
+        if attach_stdin {
+            cmd.arg("-i");
+        }
 
         for env_var in env_vars {
             cmd.arg("-e").arg(env_var);
         }
 
-        let result = cmd.arg(container_handle.id()).args(command).status()?;
+        cmd.arg(container_handle.id()).args(command);
+
+        debug!("Executing container exec command: {:?}", cmd);
+        let result = cmd.status()?;
 
         if result.code() != Some(0) {
             bail!("Container exec command failed")
@@ -224,10 +235,12 @@ impl ContainerRuntime for AppleRuntime {
         let result: Vec<(String, Box<dyn super::ContainerHandle>)> = containers
             .iter()
             .filter_map(|container| {
+                trace!("Inspecting container: {}", container);
                 let project_name = container["configuration"]["labels"]["devcon.project"]
                     .as_str()
                     .unwrap_or_default();
 
+                trace!("Container project name: {}", project_name);
                 if project_name.is_empty() {
                     return None;
                 }
@@ -235,7 +248,10 @@ impl ContainerRuntime for AppleRuntime {
                 let id = container["configuration"]["id"]
                     .as_str()
                     .unwrap_or_default()
+                    .trim()
                     .to_string();
+
+                debug!("Found container with ID: {}", id);
 
                 let container_name = format!("devcon.{}", project_name);
                 let handle = AppleContainerHandle { id };
@@ -251,7 +267,8 @@ impl ContainerRuntime for AppleRuntime {
 
     fn images(&self) -> anyhow::Result<Vec<String>> {
         let output = Command::new("container")
-            .arg("images")
+            .arg("image")
+            .arg("list")
             .arg("--format")
             .arg("json")
             .output()?;
@@ -263,13 +280,14 @@ impl ContainerRuntime for AppleRuntime {
         let result: Vec<String> = images
             .iter()
             .filter_map(|image| {
+                trace!("Inspecting image: {}", image);
                 let name = &image["reference"];
                 if name.is_null() {
                     return None;
                 }
 
                 if name.as_str().unwrap_or_default().starts_with("devcon") {
-                    Some(name.as_str().unwrap_or_default().to_string())
+                    Some(name.as_str().unwrap_or_default().trim().to_string())
                 } else {
                     None
                 }
