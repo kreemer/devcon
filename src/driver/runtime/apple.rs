@@ -87,7 +87,6 @@ impl ContainerRuntime for AppleRuntime {
             .arg(dockerfile_path)
             .arg("-t")
             .arg(image_tag)
-            .arg("-q")
             .arg(context_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

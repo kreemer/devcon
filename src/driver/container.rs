@@ -357,8 +357,8 @@ impl ContainerDriver {
             ));
 
             feature_install.push_str(&format!(
-                "RUN /bin/bash -c \"cd /tmp/features/{} && chmod +x install.sh && . devcontainer-features.env && ./install.sh\" \n",
-                feature_name
+                "RUN chmod +x /tmp/features/{}/install.sh && . /tmp/features/{}/devcontainer-features.env && /tmp/features/{}/install.sh\n",
+                feature_name, feature_name, feature_name
             ));
 
             i += 1;
