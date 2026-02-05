@@ -421,6 +421,7 @@ ENV _REMOTE_USER={{ remote_user }}
 ENV _CONTAINER_USER={{ container_user }}
 ENV _REMOTE_USER_HOME={{ remote_user_home }}
 ENV _CONTAINER_USER_HOME={{ container_user_home }}
+ENV DEVCON_CONTROL_HOST={{ runtime_host_address }}
 
 USER root
 RUN mkdir /tmp/features
@@ -469,6 +470,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
             dotfiles_setup => &dotfiles_setup,
             env_setup => &env_setup,
             workspace_name => devcontainer_workspace.path.file_name().unwrap().to_string_lossy(),
+            runtime_host_address => self.runtime.get_host_address(),
         })?;
 
         fs::write(&dockerfile, contents)?;
