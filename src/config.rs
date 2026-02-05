@@ -474,36 +474,7 @@ impl_property_registry! {
 /// Docker runtime-specific configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
-pub struct DockerRuntimeConfig {
-    /// Memory limit for container builds (e.g., "4g", "512m").
-    ///
-    /// If not set, no memory limit is applied.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub build_memory: Option<String>,
-
-    /// CPU limit for container builds (e.g., "2", "0.5").
-    ///
-    /// If not set, no CPU limit is applied.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub build_cpu: Option<String>,
-}
-
-impl_property_registry! {
-    DockerRuntimeConfig {
-        build_memory: Option<String> => {
-            path: "buildMemory",
-            property_type: PropertyType::String,
-            description: "Memory limit for Docker builds (e.g., 4g, 512m)",
-            validator: PropertyValidator::Memory,
-        },
-        build_cpu: Option<String> => {
-            path: "buildCpu",
-            property_type: PropertyType::String,
-            description: "CPU limit for Docker builds (e.g., 2, 0.5)",
-            validator: PropertyValidator::Cpu,
-        },
-    }
-}
+pub struct DockerRuntimeConfig {}
 
 /// Apple runtime-specific configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -878,16 +849,6 @@ impl Config {
             return self.agents.as_ref()?.get_property(rest);
         }
 
-        // Handle nested runtimeConfig.docker properties
-        if let Some(rest) = property.strip_prefix("runtimeConfig.docker.") {
-            return self
-                .runtime_config
-                .as_ref()?
-                .docker
-                .as_ref()?
-                .get_property(rest);
-        }
-
         // Handle nested runtimeConfig.apple properties
         if let Some(rest) = property.strip_prefix("runtimeConfig.apple.") {
             return self
@@ -944,13 +905,6 @@ impl Config {
             return agents.set_property(rest, value);
         }
 
-        // Handle nested runtimeConfig.docker properties
-        if let Some(rest) = property.strip_prefix("runtimeConfig.docker.") {
-            let runtime_config = self.runtime_config.get_or_insert_with(Default::default);
-            let docker = runtime_config.docker.get_or_insert_with(Default::default);
-            return docker.set_property(rest, value);
-        }
-
         // Handle nested runtimeConfig.apple properties
         if let Some(rest) = property.strip_prefix("runtimeConfig.apple.") {
             let runtime_config = self.runtime_config.get_or_insert_with(Default::default);
@@ -994,16 +948,6 @@ impl Config {
         if let Some(rest) = property.strip_prefix("agents.") {
             if let Some(agents) = self.agents.as_mut() {
                 return agents.unset_property(rest);
-            }
-            return Ok(());
-        }
-
-        // Handle nested runtimeConfig.docker properties
-        if let Some(rest) = property.strip_prefix("runtimeConfig.docker.") {
-            if let Some(runtime_config) = self.runtime_config.as_mut() {
-                if let Some(docker) = runtime_config.docker.as_mut() {
-                    return docker.unset_property(rest);
-                }
             }
             return Ok(());
         }
@@ -1067,18 +1011,6 @@ impl Config {
             ));
         }
 
-        // Add runtimeConfig.docker properties with prefix
-        for meta in DockerRuntimeConfig::PROPERTIES {
-            all_properties.push((
-                format!("runtimeConfig.docker.{}", meta.path),
-                match meta.property_type {
-                    PropertyType::String => "string".to_string(),
-                    PropertyType::Boolean => "boolean".to_string(),
-                },
-                meta.description.to_string(),
-            ));
-        }
-
         // Add runtimeConfig.apple properties with prefix
         for meta in AppleRuntimeConfig::PROPERTIES {
             all_properties.push((
@@ -1124,14 +1056,6 @@ impl Config {
 
         // Validate runtime config
         if let Some(rc) = &self.runtime_config {
-            if let Some(docker) = &rc.docker {
-                if let Some(mem) = &docker.build_memory {
-                    validate_property_value(&PropertyValidator::Memory, mem)?;
-                }
-                if let Some(cpu) = &docker.build_cpu {
-                    validate_property_value(&PropertyValidator::Cpu, cpu)?;
-                }
-            }
             if let Some(apple) = &rc.apple {
                 if let Some(mem) = &apple.build_memory {
                     validate_property_value(&PropertyValidator::Memory, mem)?;

@@ -56,6 +56,7 @@ fn extract_container_port(port: &crate::devcontainer::ForwardPort) -> Option<u16
 
 /// Docker CLI runtime implementation.
 pub struct DockerRuntime {
+    #[allow(dead_code)]
     config: DockerRuntimeConfig,
 }
 
@@ -89,17 +90,7 @@ impl ContainerRuntime for DockerRuntime {
             .arg(dockerfile_path)
             .arg("-t")
             .arg(image_tag);
-        
-        // Add memory limit if configured
-        if let Some(memory) = &self.config.build_memory {
-            cmd.arg("--memory").arg(memory);
-        }
-        
-        // Add CPU limit if configured
-        if let Some(cpu) = &self.config.build_cpu {
-            cmd.arg("--cpus").arg(cpu);
-        }
-        
+
         cmd.arg(context_path)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
