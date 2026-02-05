@@ -86,18 +86,16 @@ impl ContainerRuntime for AppleRuntime {
     ) -> anyhow::Result<()> {
         let mut cmd = Command::new("container");
         cmd.arg("build");
-        
+
         // Add memory limit if configured (default: 4g)
-        let memory = self.config.build_memory.as_ref()
-            .map(|s| s.as_str())
-            .unwrap_or("4g");
+        let memory = self.config.build_memory.as_deref().unwrap_or("4g");
         cmd.arg("--memory").arg(memory);
-        
+
         // Add CPU limit if configured
         if let Some(cpu) = &self.config.build_cpu {
             cmd.arg("--cpus").arg(cpu);
         }
-        
+
         cmd.arg("-f")
             .arg(dockerfile_path)
             .arg("-t")

@@ -953,11 +953,11 @@ impl Config {
         }
 
         // Handle nested runtimeConfig.apple properties
-        if let Some(rest) = property.strip_prefix("runtimeConfig.apple.") {
-            if let Some(runtime_config) = self.runtime_config.as_mut() {
-                if let Some(apple) = runtime_config.apple.as_mut() {
-                    return apple.unset_property(rest);
-                }
+        if let Some(rest) = property.strip_prefix("runtimeConfig.apple.")
+            && let Some(runtime_config) = self.runtime_config.as_mut()
+        {
+            if let Some(apple) = runtime_config.apple.as_mut() {
+                return apple.unset_property(rest);
             }
             return Ok(());
         }
@@ -1055,14 +1055,14 @@ impl Config {
         )?;
 
         // Validate runtime config
-        if let Some(rc) = &self.runtime_config {
-            if let Some(apple) = &rc.apple {
-                if let Some(mem) = &apple.build_memory {
-                    validate_property_value(&PropertyValidator::Memory, mem)?;
-                }
-                if let Some(cpu) = &apple.build_cpu {
-                    validate_property_value(&PropertyValidator::Cpu, cpu)?;
-                }
+        if let Some(rc) = &self.runtime_config
+            && let Some(apple) = &rc.apple
+        {
+            if let Some(mem) = &apple.build_memory {
+                validate_property_value(&PropertyValidator::Memory, mem)?;
+            }
+            if let Some(cpu) = &apple.build_cpu {
+                validate_property_value(&PropertyValidator::Cpu, cpu)?;
             }
         }
 
