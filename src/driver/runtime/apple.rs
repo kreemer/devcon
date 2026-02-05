@@ -312,6 +312,6 @@ impl ContainerRuntime for AppleRuntime {
     }
 
     fn get_host_address(&self) -> String {
-        return "host.container.internal".to_string();
+        "host.container.internal".to_string()
     }
 }
