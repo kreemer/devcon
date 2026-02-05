@@ -32,6 +32,7 @@ use std::{
 
 use anyhow::bail;
 
+use crate::config::AppleRuntimeConfig;
 use crate::driver::runtime::RuntimeParameters;
 use tracing::{debug, trace};
 
@@ -55,7 +56,9 @@ fn extract_container_port(port: &crate::devcontainer::ForwardPort) -> Option<u16
 }
 
 /// Apple's container CLI runtime implementation.
-pub struct AppleRuntime;
+pub struct AppleRuntime {
+    config: AppleRuntimeConfig,
+}
 
 /// Handle for an Apple container instance.
 pub struct AppleContainerHandle {
@@ -69,8 +72,8 @@ impl super::ContainerHandle for AppleContainerHandle {
 }
 
 impl AppleRuntime {
-    pub fn new() -> Self {
-        Self
+    pub fn new(config: AppleRuntimeConfig) -> Self {
+        Self { config }
     }
 }
 
@@ -81,16 +84,29 @@ impl ContainerRuntime for AppleRuntime {
         context_path: &Path,
         image_tag: &str,
     ) -> anyhow::Result<()> {
-        let child = Command::new("container")
-            .arg("build")
-            .arg("-f")
+        let mut cmd = Command::new("container");
+        cmd.arg("build");
+        
+        // Add memory limit if configured (default: 4g)
+        let memory = self.config.build_memory.as_ref()
+            .map(|s| s.as_str())
+            .unwrap_or("4g");
+        cmd.arg("--memory").arg(memory);
+        
+        // Add CPU limit if configured
+        if let Some(cpu) = &self.config.build_cpu {
+            cmd.arg("--cpus").arg(cpu);
+        }
+        
+        cmd.arg("-f")
             .arg(dockerfile_path)
             .arg("-t")
             .arg(image_tag)
             .arg(context_path)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+
+        let child = cmd.spawn()?;
 
         let result = stream_build_output(child)?;
 

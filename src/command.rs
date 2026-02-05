@@ -33,11 +33,7 @@
 //! - Executing the requested operation
 //! - Handling errors and returning results
 
-use std::io::Write;
-use std::{
-    fs::{self, File},
-    path::PathBuf,
-};
+use std::path::PathBuf;
 
 use crate::{
     config::Config,
@@ -49,70 +45,209 @@ use crate::{
     workspace::Workspace,
 };
 use anyhow::Result;
+use comfy_table::{Cell, Color, ContentArrangement, Table, presets::UTF8_FULL};
 use tracing::{debug, trace};
 
-/// Handles the config command to display the config file path.
+/// Helper function to get runtime-specific config
+fn get_runtime_specific_config(
+    config: &Config,
+    runtime_name: &str,
+) -> Result<Box<dyn crate::driver::runtime::ContainerRuntime>> {
+    let runtime_config = config.get_runtime_config();
+
+    let runtime: Box<dyn crate::driver::runtime::ContainerRuntime> = match runtime_name {
+        "docker" => {
+            let docker_config = runtime_config.docker.unwrap_or_default();
+            Box::new(DockerRuntime::new(docker_config))
+        }
+        "apple" => {
+            let apple_config = runtime_config.apple.unwrap_or_default();
+            Box::new(AppleRuntime::new(apple_config))
+        }
+        _ => anyhow::bail!("Unknown runtime: {}", runtime_name),
+    };
+
+    Ok(runtime)
+}
+
+/// Handles the config show command to display current configuration.
 ///
-/// This function prints the path to the DevCon configuration file,
-/// which is typically located at `~/.config/devcon/config.yaml`.
+/// This function loads the current configuration and displays it as YAML
+/// with comprehensive comments showing all available options.
+///
+/// # Errors
+///
+/// Returns an error if the config cannot be loaded or serialized.
+pub fn handle_config_show() -> Result<()> {
+    let config = Config::load()?;
+
+    let yaml = serde_yaml::to_string(&config)?;
+
+    // Add comprehensive comments header
+    let documented_yaml = format!(
+        r#"# DevCon Configuration File
+# This file contains user-specific settings for DevCon.
+# All fields are optional and will use defaults if not specified.
+#
+# Available properties (use 'devcon config list' to see all):
+#
+# General Settings:
+#   dotfilesRepository: URL to dotfiles repository
+#   dotfilesInstallCommand: Custom install command for dotfiles
+#   defaultShell: Default shell for shell command (e.g., /bin/zsh)
+#   buildPath: Default build path for container builds
+#   runtime: Container runtime (auto, docker, apple) - default: auto
+#
+# Agent Settings (under 'agents'):
+#   binaryUrl: URL to precompiled agent binary
+#   gitRepository: Git repository URL for building agent from source
+#   gitBranch: Git branch for agent source (default: main)
+#   disable: Disable agent installation (true/false)
+#
+# Runtime Settings (under 'runtimeConfig'):
+#   docker.buildMemory: Memory limit for Docker builds (e.g., 4g, 512m)
+#   docker.buildCpu: CPU limit for Docker builds (e.g., 2, 0.5)
+#   apple.buildMemory: Memory limit for Apple builds (default: 4g)
+#   apple.buildCpu: CPU limit for Apple builds (e.g., 2, 0.5)
+#
+# Current Configuration:
+
+{}
+"#,
+        yaml
+    );
+
+    println!("{}", documented_yaml);
+    Ok(())
+}
+
+/// Handles the config get command to retrieve a single property value.
+///
+/// # Errors
+///
+/// Returns an error if the config cannot be loaded or the property doesn't exist.
+pub fn handle_config_get(property: &str) -> Result<()> {
+    let config = Config::load()?;
+
+    match config.get_value(property) {
+        Some(value) => {
+            println!("{}", value);
+            Ok(())
+        }
+        None => {
+            println!("Property '{}' is not set", property);
+            Ok(())
+        }
+    }
+}
+
+/// Handles the config set command to set a property value.
+///
+/// # Errors
+///
+/// Returns an error if the config cannot be loaded, the property is invalid,
+/// or the value fails validation.
+pub fn handle_config_set(property: &str, value: &str) -> Result<()> {
+    let mut config = Config::load()?;
+
+    config.set_value(property, value.to_string())?;
+    config.save()?;
+
+    println!("Set {} = {}", property, value);
+    Ok(())
+}
+
+/// Handles the config unset command to remove a property value.
+///
+/// # Errors
+///
+/// Returns an error if the config cannot be loaded or saved.
+pub fn handle_config_unset(property: &str) -> Result<()> {
+    let mut config = Config::load()?;
+
+    config.unset_value(property)?;
+    config.save()?;
+
+    println!("Unset {}", property);
+    Ok(())
+}
+
+/// Handles the config validate command to check all configuration values.
+///
+/// # Errors
+///
+/// Returns an error (with exit code 1) if any configuration values are invalid.
+pub fn handle_config_validate() -> Result<()> {
+    let config = Config::load()?;
+
+    match config.validate() {
+        Ok(()) => {
+            println!("✓ Configuration is valid");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("✗ Configuration validation failed:");
+            eprintln!("  {}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Handles the config path command to show the configuration file location.
 ///
 /// # Errors
 ///
 /// Returns an error if the config directory cannot be determined.
-///
-/// # Examples
-///
-/// ```no_run
-/// # use devcon::command::handle_config_command;
-/// handle_config_command(false)?;
-/// # Ok::<(), anyhow::Error>(())
-/// ```
-pub fn handle_config_command(create_if_missing: bool) -> Result<()> {
+pub fn handle_config_path() -> Result<()> {
     let config_path = Config::get_config_path()?;
+    println!("{}", config_path.display());
+    Ok(())
+}
 
-    trace!("Config path {}", config_path.display());
-    if !config_path.exists() && create_if_missing {
-        debug!("Creating new config file at {}", config_path.display());
-        let config_dir = config_path
-            .parent()
-            .ok_or_else(|| anyhow::anyhow!("Failed to get config directory"))?;
-        fs::create_dir_all(config_dir)?;
-        let mut file = File::create(&config_path)?;
+/// Handles the config list command to display all available properties.
+///
+/// # Errors
+///
+/// Returns an error if the table cannot be created or displayed.
+pub fn handle_config_list(filter: Option<&str>) -> Result<()> {
+    let properties = Config::list_properties(filter);
 
-        let documentation = r#"# DevCon Configuration File
-# This file contains user-specific settings for DevCon.
-# Modify the values below to customize your DevCon experience.
-#
-# dotfiles_repository: https://github.com/user/dotfiles.git
-# dotfiles_install_command: ./install.sh
-# default_shell: /bin/zsh
-# additional_features:
-#   ghcr.io/someowner/somerepo/somefeature:latest:
-#     option1: value1
-#     option2: value2
-# env_variables:
-#   - VAR1=value1
-#   - LOCALENV
-#
-# Agent Configuration:
-# Use either agent_binary_url for a precompiled binary, or agent_git_repository for compilation
-# agent_binary_url: https://github.com/kreemer/devcon/releases/latest/download/devcon-agent-macos-arm64
-# agent_git_repository: https://github.com/kreemer/devcon.git
-# agent_git_branch: main
-# agent_disable: false
-"#;
-
-        file.write_all(documentation.as_bytes())?;
-
-        println!("Config file created at {}", config_path.display());
+    if properties.is_empty() {
+        if let Some(f) = filter {
+            println!("No properties match filter: {}", f);
+        } else {
+            println!("No properties available");
+        }
         return Ok(());
     }
 
-    let config = Config::load()?;
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .set_content_arrangement(ContentArrangement::Dynamic);
 
-    trace!("Config loaded {:?}", config);
+    // Add header
+    table.set_header(vec![
+        Cell::new("Property").fg(Color::Green),
+        Cell::new("Type").fg(Color::Green),
+        Cell::new("Description").fg(Color::Green),
+    ]);
 
-    println!("{}", config_path.display());
+    // Add rows
+    for (property, prop_type, description) in properties {
+        table.add_row(vec![
+            Cell::new(property),
+            Cell::new(prop_type),
+            Cell::new(description),
+        ]);
+    }
+
+    println!("{}", table);
+
+    if let Some(f) = filter {
+        println!("\nShowing properties matching: {}", f);
+    }
+
     Ok(())
 }
 
@@ -154,18 +289,17 @@ pub fn handle_build_command(path: PathBuf, build_path: Option<PathBuf>) -> anyho
     trace!("Config loaded {:?}", config);
     let devcontainer_workspace = Workspace::try_from(path)?;
 
+    // Resolve build_path: CLI argument takes precedence over config
+    let effective_build_path = build_path.or_else(|| config.build_path.as_ref().map(PathBuf::from));
+
     // Create runtime based on config
     let runtime_name = config.resolve_runtime()?;
     debug!("Using runtime {:?}", runtime_name);
-    let runtime: Box<dyn crate::driver::runtime::ContainerRuntime> = match runtime_name.as_str() {
-        "docker" => Box::new(DockerRuntime::new()),
-        "apple" => Box::new(AppleRuntime::new()),
-        _ => anyhow::bail!("Unknown runtime: {}", runtime_name),
-    };
+    let runtime = get_runtime_specific_config(&config, &runtime_name)?;
 
     let driver = ContainerDriver::new(config, runtime);
 
-    let result = driver.build(devcontainer_workspace, &[], build_path);
+    let result = driver.build(devcontainer_workspace, &[], effective_build_path);
 
     if result.is_err() {
         anyhow::bail!(
@@ -216,11 +350,7 @@ pub fn handle_start_command(path: PathBuf) -> anyhow::Result<()> {
     // Create runtime based on config
     let runtime_name = config.resolve_runtime()?;
     debug!("Using runtime {:?}", runtime_name);
-    let runtime: Box<dyn crate::driver::runtime::ContainerRuntime> = match runtime_name.as_str() {
-        "docker" => Box::new(DockerRuntime::new()),
-        "apple" => Box::new(AppleRuntime::new()),
-        _ => anyhow::bail!("Unknown runtime: {}", runtime_name),
-    };
+    let runtime = get_runtime_specific_config(&config, &runtime_name)?;
 
     let driver = ContainerDriver::new(config, runtime);
     driver.start(devcontainer_workspace, &[])?;
@@ -248,11 +378,7 @@ pub fn handle_shell_command(path: PathBuf, _env: &[String]) -> anyhow::Result<()
     // Create runtime based on config
     let runtime_name = config.resolve_runtime()?;
     debug!("Using runtime {:?}", runtime_name);
-    let runtime: Box<dyn crate::driver::runtime::ContainerRuntime> = match runtime_name.as_str() {
-        "docker" => Box::new(DockerRuntime::new()),
-        "apple" => Box::new(AppleRuntime::new()),
-        _ => anyhow::bail!("Unknown runtime: {}", runtime_name),
-    };
+    let runtime = get_runtime_specific_config(&config, &runtime_name)?;
 
     let driver = ContainerDriver::new(config, runtime);
     driver.shell(devcontainer_workspace)?;
@@ -299,14 +425,13 @@ pub fn handle_up_command(path: PathBuf, build_path: Option<PathBuf>) -> anyhow::
     trace!("Config loaded {:?}", config);
     let devcontainer_workspace = Workspace::try_from(path)?;
 
+    // Resolve build_path: CLI argument takes precedence over config
+    let effective_build_path = build_path.or_else(|| config.build_path.as_ref().map(PathBuf::from));
+
     // Create runtime based on config
     let runtime_name = config.resolve_runtime()?;
     debug!("Using runtime {:?}", runtime_name);
-    let runtime: Box<dyn crate::driver::runtime::ContainerRuntime> = match runtime_name.as_str() {
-        "docker" => Box::new(DockerRuntime::new()),
-        "apple" => Box::new(AppleRuntime::new()),
-        _ => anyhow::bail!("Unknown runtime: {}", runtime_name),
-    };
+    let runtime = get_runtime_specific_config(&config, &runtime_name)?;
 
     let driver = ContainerDriver::new(config, runtime);
 
@@ -318,7 +443,7 @@ pub fn handle_up_command(path: PathBuf, build_path: Option<PathBuf>) -> anyhow::
         devcontainer_workspace.clone(),
         &[],
         Some(processed_features.clone()),
-        build_path,
+        effective_build_path,
     )?;
 
     // Start the container with pre-processed features
@@ -359,7 +484,7 @@ mod test {
 
     #[test]
     fn test_handle_config_command() {
-        let result = handle_config_command(false);
+        let result = handle_config_path();
         assert!(result.is_ok());
     }
 

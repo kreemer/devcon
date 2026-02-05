@@ -46,6 +46,7 @@ open = "5.3"
 strip-ansi-escapes = "0.2.1"
 sha2 = "0.10"
 json-strip-comments = "3.1.0"
+comfy-table = "7.2"
 
 [dev-dependencies]
 assert_cmd = "2.1.1"

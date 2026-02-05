@@ -189,11 +189,11 @@ impl ContainerDriver {
 
         // Add agent installation feature to the list
         // The agent's dependencies will be resolved along with all other features
-        if !(self.config.agent_disable.unwrap_or(false)) {
+        if !self.config.is_agent_disabled() {
             let agent_config = AgentConfig::new(
-                self.config.agent_binary_url.clone(),
-                self.config.agent_git_repository.clone(),
-                self.config.agent_git_branch.clone(),
+                self.config.get_agent_binary_url().cloned(),
+                self.config.get_agent_git_repository().cloned(),
+                self.config.get_agent_git_branch().cloned(),
             );
             debug!("Using agent configuration: {:?}", agent_config);
             let agent_path = agent::Agent::new(agent_config).generate()?;
@@ -357,7 +357,7 @@ impl ContainerDriver {
             ));
 
             feature_install.push_str(&format!(
-                "RUN chmod +x /tmp/features/{}/install.sh && . /tmp/features/{}/devcontainer-features.env && /tmp/features/{}/install.sh\n",
+                "RUN chmod +x /tmp/features/{}/install.sh && . /tmp/features/{}/devcontainer-features.env && cd /tmp/features/{} && ./install.sh\n",
                 feature_name, feature_name, feature_name
             ));
 
@@ -1129,6 +1129,7 @@ CMD ["-c", "echo Container started\ntrap \"exit 0\" 15\n\nexec \"$@\"\nwhile sle
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::DockerRuntimeConfig;
     use crate::devcontainer::{FeatureRegistry, FeatureRegistryType, FeatureSource};
     use crate::feature::Feature;
     use std::path::PathBuf;
@@ -1314,7 +1315,7 @@ mod tests {
         let workspace3 = Workspace::try_from(temp_dir3.path().to_path_buf()).unwrap();
 
         let config = Config::default();
-        let runtime = Box::new(DockerRuntime::new());
+        let runtime = Box::new(DockerRuntime::new(DockerRuntimeConfig::default()));
         let driver = ContainerDriver::new(config, runtime);
 
         let id1 = driver.get_devcontainer_id(&workspace1);
@@ -1360,7 +1361,7 @@ mod tests {
 
         let workspace = Workspace::try_from(temp_dir.path().to_path_buf()).unwrap();
         let config = Config::default();
-        let runtime = Box::new(DockerRuntime::new());
+        let runtime = Box::new(DockerRuntime::new(DockerRuntimeConfig::default()));
         let driver = ContainerDriver::new(config, runtime);
 
         // Test devcontainerId substitution
