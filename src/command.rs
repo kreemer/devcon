@@ -475,6 +475,25 @@ pub fn handle_up_command(path: PathBuf, build_path: Option<PathBuf>) -> anyhow::
 /// # Ok::<(), anyhow::Error>(())
 /// ```
 pub fn handle_serve_command(port: u16) -> Result<()> {
+    let config = Config::load()?;
+    trace!("Config loaded {:?}", config);
+
+    // Create runtime based on config
+    let runtime_name = config.resolve_runtime()?;
+    debug!("Using runtime {:?}", runtime_name);
+
+    if runtime_name == "apple" {
+        println!(
+            "⚠️  Warning: For the connection to work, you have to register the dns entry 'host.container.internal' for localhost."
+        );
+        println!("   You can do this by invoking following command with sudo: ");
+        println!(
+            "     sudo container system dns create --localhost 192.168.2.10 host.container.internal"
+        );
+        println!(
+            "   More info: https://github.com/apple/container/blob/main/docs/how-to.md#access-a-host-service-from-a-container"
+        );
+    }
     control_server::start_control_server(port)
 }
 
