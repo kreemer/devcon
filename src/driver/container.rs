@@ -59,7 +59,7 @@ use anyhow::bail;
 use minijinja::Environment;
 use sha2::{Digest, Sha256};
 use tempfile::TempDir;
-use tracing::{debug, info, trace, warn};
+use tracing::{Level, debug, info, trace, warn};
 
 use crate::devcontainer::{FeatureRef, FeatureSource};
 use crate::driver::agent::{self, AgentConfig};
@@ -307,7 +307,11 @@ impl ContainerDriver {
             }
             None => TempDir::new()?,
         };
-        let directory_path = directory.keep();
+        let directory_path = if tracing::event_enabled!(Level::DEBUG) {
+            directory.keep()
+        } else {
+            directory.path().to_path_buf()
+        };
         info!(
             "Building container in temporary directory: {}",
             directory_path.to_string_lossy()
