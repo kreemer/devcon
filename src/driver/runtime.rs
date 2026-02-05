@@ -299,4 +299,13 @@ pub trait ContainerRuntime: Send {
     ///
     /// Returns an error if the list images command fails or output cannot be parsed.
     fn images(&self) -> anyhow::Result<Vec<String>>;
+
+    /// Get the host address for the runtime.
+    ///
+    /// This is used to configure containers to connect back to the host.
+    ///
+    /// # Returns
+    ///
+    /// A string representing the host address.
+    fn get_host_address(&self) -> String;
 }
