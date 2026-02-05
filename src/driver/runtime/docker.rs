@@ -304,6 +304,6 @@ impl ContainerRuntime for DockerRuntime {
     }
 
     fn get_host_address(&self) -> String {
-        return "host.docker.internal".to_string();
+        "host.docker.internal".to_string()
     }
 }
