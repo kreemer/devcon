@@ -81,7 +81,7 @@ fn get_runtime_specific_config(
 pub fn handle_config_show() -> Result<()> {
     let config = Config::load()?;
 
-    let yaml = serde_yaml::to_string(&config)?;
+    let yaml = yaml_serde::to_string(&config)?;
 
     // Add comprehensive comments header
     let documented_yaml = format!(

@@ -676,7 +676,7 @@ impl Config {
             );
         }
 
-        let config: Config = serde_yaml::from_str(&content)
+        let config: Config = yaml_serde::from_str(&content)
             .with_context(|| format!("Failed to parse config file: {}", config_path.display()))?;
 
         Ok(config)
@@ -703,7 +703,6 @@ impl Config {
     /// config.save()?;
     /// # Ok::<(), anyhow::Error>(())
     /// ```
-    #[allow(dead_code)]
     pub fn save(&self) -> Result<()> {
         let config_path = Self::get_config_path()?;
 
@@ -713,7 +712,7 @@ impl Config {
             })?;
         }
 
-        let yaml = serde_yaml::to_string(self)
+        let yaml = yaml_serde::to_string(self)
             .with_context(|| "Failed to serialize configuration to YAML")?;
 
         fs::write(&config_path, yaml)
@@ -1090,7 +1089,7 @@ mod tests {
             ..Default::default()
         };
 
-        let yaml = serde_yaml::to_string(&config).unwrap();
+        let yaml = yaml_serde::to_string(&config).unwrap();
         assert!(yaml.contains("dotfilesRepository"));
         assert!(yaml.contains("https://github.com/user/dotfiles"));
         assert!(yaml.contains("envVariables"));
@@ -1108,7 +1107,7 @@ envVariables:
   - LANG=en_US.UTF-8
 "#;
 
-        let config: Config = serde_yaml::from_str(yaml).unwrap();
+        let config: Config = yaml_serde::from_str(yaml).unwrap();
         assert_eq!(
             config.dotfiles_repository,
             Some("https://github.com/user/dotfiles".to_string())
