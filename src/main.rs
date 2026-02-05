@@ -53,6 +53,57 @@ struct Cli {
 }
 
 #[derive(Subcommand, Debug)]
+enum ConfigAction {
+    /// Show the current configuration
+    #[command(about = "Display current configuration with all values")]
+    Show,
+
+    /// Get a configuration property value
+    #[command(about = "Get the value of a configuration property")]
+    Get {
+        /// Property path in camelCase dot-notation (e.g., agents.binaryUrl)
+        #[arg(help = "Property path to get")]
+        property: String,
+    },
+
+    /// Set a configuration property value
+    #[command(about = "Set a configuration property value")]
+    Set {
+        /// Property path in camelCase dot-notation (e.g., agents.binaryUrl)
+        #[arg(help = "Property path to set")]
+        property: String,
+
+        /// Value to set
+        #[arg(help = "Value to set")]
+        value: String,
+    },
+
+    /// Unset (remove) a configuration property value
+    #[command(about = "Unset a configuration property")]
+    Unset {
+        /// Property path in camelCase dot-notation (e.g., agents.binaryUrl)
+        #[arg(help = "Property path to unset")]
+        property: String,
+    },
+
+    /// Validate the configuration
+    #[command(about = "Validate all configuration values")]
+    Validate,
+
+    /// Show the configuration file path
+    #[command(about = "Show the configuration file location")]
+    Path,
+
+    /// List all available configuration properties
+    #[command(about = "List all configuration properties")]
+    List {
+        /// Filter properties by substring match
+        #[arg(help = "Filter properties by substring", long, short)]
+        filter: Option<String>,
+    },
+}
+
+#[derive(Subcommand, Debug)]
 enum Commands {
     /// Builds a development container for the specified path
     #[command(about = "Create a development container")]
@@ -111,10 +162,10 @@ enum Commands {
         env: Vec<String>,
     },
     /// Prints the config file location path
-    #[command(about = "Show the config file location")]
+    #[command(about = "Manage DevCon configuration")]
     Config {
-        #[arg(help = "Create the config file if it does not exist", long, short)]
-        create_if_missing: bool,
+        #[command(subcommand)]
+        action: ConfigAction,
     },
     /// Starts the control server for agent connections
     #[command(about = "Start the control server for managing agent connections")]
@@ -141,11 +192,7 @@ fn main() -> anyhow::Result<()> {
     };
 
     // Configure logging: third-party crates only log at trace level, our crate uses the configured level
-    let third_party_level = if level == Level::TRACE {
-        "trace"
-    } else {
-        "error"
-    };
+    let third_party_level = if cli.debug > 3 { "trace" } else { "error" };
     let filter = EnvFilter::new(format!(
         "{}={},reqwest={},hyper={},h2={},tower={}",
         env!("CARGO_PKG_NAME").replace('-', "_"),
@@ -186,9 +233,29 @@ fn main() -> anyhow::Result<()> {
                 env,
             )?;
         }
-        Commands::Config { create_if_missing } => {
-            handle_config_command(*create_if_missing)?;
-        }
+        Commands::Config { action } => match action {
+            ConfigAction::Show => {
+                handle_config_show()?;
+            }
+            ConfigAction::Get { property } => {
+                handle_config_get(property)?;
+            }
+            ConfigAction::Set { property, value } => {
+                handle_config_set(property, value)?;
+            }
+            ConfigAction::Unset { property } => {
+                handle_config_unset(property)?;
+            }
+            ConfigAction::Validate => {
+                handle_config_validate()?;
+            }
+            ConfigAction::Path => {
+                handle_config_path()?;
+            }
+            ConfigAction::List { filter } => {
+                handle_config_list(filter.as_deref())?;
+            }
+        },
         Commands::Serve { port } => {
             handle_serve_command(*port)?;
         }

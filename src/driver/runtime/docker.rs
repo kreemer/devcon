@@ -32,6 +32,7 @@ use std::{
 use anyhow::bail;
 use tracing::trace;
 
+use crate::config::DockerRuntimeConfig;
 use crate::driver::runtime::RuntimeParameters;
 
 use super::{ContainerRuntime, stream_build_output};
@@ -54,11 +55,13 @@ fn extract_container_port(port: &crate::devcontainer::ForwardPort) -> Option<u16
 }
 
 /// Docker CLI runtime implementation.
-pub struct DockerRuntime;
+pub struct DockerRuntime {
+    config: DockerRuntimeConfig,
+}
 
 impl DockerRuntime {
-    pub fn new() -> Self {
-        Self
+    pub fn new(config: DockerRuntimeConfig) -> Self {
+        Self { config }
     }
 }
 
@@ -80,16 +83,28 @@ impl ContainerRuntime for DockerRuntime {
         context_path: &Path,
         image_tag: &str,
     ) -> anyhow::Result<()> {
-        let child = Command::new("docker")
-            .arg("build")
+        let mut cmd = Command::new("docker");
+        cmd.arg("build")
             .arg("-f")
             .arg(dockerfile_path)
             .arg("-t")
-            .arg(image_tag)
-            .arg(context_path)
+            .arg(image_tag);
+        
+        // Add memory limit if configured
+        if let Some(memory) = &self.config.build_memory {
+            cmd.arg("--memory").arg(memory);
+        }
+        
+        // Add CPU limit if configured
+        if let Some(cpu) = &self.config.build_cpu {
+            cmd.arg("--cpus").arg(cpu);
+        }
+        
+        cmd.arg(context_path)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
+            .stderr(Stdio::piped());
+
+        let child = cmd.spawn()?;
 
         let result = stream_build_output(child)?;
 
